@@ -1,0 +1,25 @@
+Is providing AI agents with their own dedicated programming language a good idea?
+
+Pros:
+- Purpose-built abstractions (like agent, tool, guardrail) reduce boilerplate and make
+  intent explicit, which helps both humans and AI reason about agent systems.
+- A dedicated language can enforce safety constraints at the language level rather than
+  relying on convention.
+- Declarative agent definitions are easier to validate, audit, and compose than
+  imperative code scattered across files.
+- Domain-specific type systems can catch agent-specific errors at compile time.
+
+Cons:
+- New languages face a steep adoption curve -- developers must learn yet another syntax
+  when existing languages with libraries could suffice.
+- Ecosystem maturity is a real barrier: tooling, IDE support, debugging, and community
+  take years to develop.
+- Risk of over-specialization -- if the agent paradigm shifts, the language may become
+  obsolete.
+- A well-designed SDK in Python or TypeScript might deliver 80% of the benefit with 20%
+  of the friction.
+
+Verdict: It is a worthwhile experiment when the domain constraints (safety,
+composability, auditability) are strict enough that general-purpose languages genuinely
+struggle. But the bar is high -- the language must offer clear advantages over a good
+framework.

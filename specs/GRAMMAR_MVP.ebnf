@@ -1,0 +1,203 @@
+(* AgentLang MVP Parser Grammar v0.1 *)
+
+program              = { declaration } EOF ;
+
+declaration          = type_decl
+                     | schema_decl
+                     | agent_decl
+                     | operation_decl
+                     | pipeline_decl ;
+
+(* ---------- Declarations ---------- *)
+
+type_decl            = "TYPE" identifier [ type_params ] "=" type_expr terminator ;
+type_params          = "[" identifier { "," identifier } "]" ;
+
+schema_decl          = "SCHEMA" identifier "=>" "{" { field_decl } "}" ;
+field_decl           = identifier ":" type_expr [ "::" constraint_expr ] [ "," ] ;
+
+agent_decl           = "AGENT" identifier "=>" { agent_property } ;
+agent_property       = "CAPABILITIES" "[" capability_list "]" terminator
+                     | "DENY" "[" capability_list "]" terminator
+                     | "TRUST_LEVEL" confidence_lit terminator
+                     | "MAX_CONCURRENCY" integer_lit terminator
+                     | "MEMORY_LIMIT" size_lit terminator
+                     | "TIMEOUT_DEFAULT" duration_lit terminator
+                     | "ON_FAILURE" failure_policy terminator
+                     | "STATE_SCHEMA" "=>" "{" { field_decl } "}" ;
+
+operation_decl       = "OPERATION" identifier "=>"
+                       { input_clause }
+                       [ output_clause ]
+                       { require_clause }
+                       { ensure_clause }
+                       { invariant_clause }
+                       body_clause ;
+
+input_clause         = "INPUT" param_list terminator ;
+output_clause        = "OUTPUT" type_expr terminator ;
+require_clause       = "REQUIRE" expression terminator ;
+ensure_clause        = "ENSURE" expression terminator ;
+invariant_clause     = "INVARIANT" expression terminator ;
+body_clause          = "BODY" block ;
+
+pipeline_decl        = "PIPELINE" identifier "=>" pipeline_chain terminator ;
+pipeline_chain       = expression { pipe_operator pipe_stage } ;
+pipe_stage           = expression ;
+pipe_operator        = "->" | "|>" ;
+
+(* ---------- Statements ---------- *)
+
+block                = "{" { statement } "}" ;
+
+statement            = store_stmt
+                     | mutable_stmt
+                     | assign_stmt
+                     | match_stmt
+                     | loop_stmt
+                     | emit_stmt
+                     | assert_stmt
+                     | retry_stmt
+                     | escalate_stmt
+                     | checkpoint_stmt
+                     | halt_stmt
+                     | delegate_stmt
+                     | expr_stmt ;
+
+store_stmt           = "STORE" identifier [ ":" type_expr ] "=" expression terminator ;
+mutable_stmt         = "MUTABLE" identifier reason_annotation [ ":" type_expr ] "=" expression terminator ;
+reason_annotation    = "@reason" "(" string_lit ")" ;
+assign_stmt          = identifier "=" expression terminator ;
+expr_stmt            = expression terminator ;
+
+emit_stmt            = "EMIT" [ expression ] terminator ;
+assert_stmt          = "ASSERT" expression terminator ;
+retry_stmt           = "RETRY" "(" integer_lit [ "," argument_list ] ")" terminator ;
+escalate_stmt        = "ESCALATE" [ "(" expression ")" ] terminator ;
+checkpoint_stmt      = "CHECKPOINT" [ string_lit ] terminator ;
+halt_stmt            = "HALT" "(" identifier [ "," expression ] ")" terminator ;
+
+delegate_stmt        = "DELEGATE" identifier "TO" identifier "=>" "{" { delegate_clause } "}" ;
+delegate_clause      = "INPUT" expression terminator
+                     | "TIMEOUT" duration_lit terminator
+                     | "ON_TIMEOUT" failure_policy terminator
+                     | "SHARED_CONTEXT" "[" identifier_list "]" terminator
+                     | "ISOLATION" "{" { isolation_rule } "}" ;
+isolation_rule       = identifier ":" identifier [ "," ] ;
+
+match_stmt           = "MATCH" expression "=>" "{" { match_arm } [ otherwise_arm ] "}" ;
+match_arm            = "WHEN" pattern "->" match_body ;
+otherwise_arm        = "OTHERWISE" "->" match_body ;
+match_body           = block | expression terminator ;
+
+pattern              = "_"
+                     | literal
+                     | success_pattern
+                     | failure_pattern
+                     | constructor_pattern
+                     | identifier ;
+
+success_pattern      = "SUCCESS" "(" pattern ")" ;
+failure_pattern      = "FAILURE" "(" error_code "," pattern "," pattern ")" ;
+constructor_pattern  = identifier "(" [ pattern { "," pattern } ] ")" ;
+error_code           = identifier ;
+
+loop_stmt            = "LOOP" "max:" integer_lit "=>" block ;
+
+(* ---------- Expressions ---------- *)
+
+expression           = logical_or ;
+logical_or           = logical_and { "OR" logical_and } ;
+logical_and          = equality { "AND" equality } ;
+equality             = comparison { ( "EQ" | "NEQ" ) comparison } ;
+comparison           = additive { ( "GT" | "GTE" | "LT" | "LTE" ) additive } ;
+additive             = multiplicative { ( "+" | "-" ) multiplicative } ;
+multiplicative       = unary { ( "*" | "/" | "%" ) unary } ;
+unary                = [ "NOT" | "-" ] postfix ;
+
+postfix              = primary
+                       { call_suffix | member_suffix | confidence_suffix | range_suffix } ;
+call_suffix          = "(" [ argument_list ] ")" ;
+member_suffix        = "." identifier ;
+confidence_suffix    = "?" ;
+range_suffix         = ".." primary ;
+
+primary              = literal
+                     | identifier
+                     | "(" expression ")"
+                     | list_lit
+                     | map_lit
+                     | fork_expr
+                     | resume_expr ;
+
+resume_expr          = "RESUME" "(" expression ")" ;
+
+fork_expr            = "FORK" "{" branch { "," branch } "}" "->" join_expr ;
+branch               = identifier ":" pipeline_chain ;
+join_expr            = "JOIN" "strategy:" "ALL_COMPLETE" ;
+
+(* ---------- Types ---------- *)
+
+type_expr            = union_type ;
+union_type           = postfix_type { "|" postfix_type } ;
+postfix_type         = primary_type [ "::" constraint_expr ] ;
+primary_type         = identifier [ "[" type_expr { "," type_expr } "]" ]
+                     | "{" field_type { "," field_type } "}" ;
+field_type           = identifier ":" type_expr ;
+
+param_list           = parameter { "," parameter } ;
+parameter            = identifier ":" type_expr ;
+
+argument_list        = argument { "," argument } ;
+argument             = [ identifier ":" ] expression ;
+
+capability_list      = identifier { "," identifier } ;
+identifier_list      = identifier { "," identifier } ;
+
+constraint_expr      = identifier "(" [ argument_list ] ")" ;
+
+failure_policy       = policy_step { "->" policy_step } ;
+policy_step          = "RETRY" "(" integer_lit [ "," argument_list ] ")"
+                     | "REASSIGN" "(" identifier ")"
+                     | "ESCALATE" [ "(" expression ")" ]
+                     | "ABORT" ;
+
+(* ---------- Literals ---------- *)
+
+literal              = integer_lit
+                     | float_lit
+                     | string_lit
+                     | bool_lit
+                     | none_lit
+                     | duration_lit
+                     | size_lit
+                     | confidence_lit
+                     | hash_lit ;
+
+list_lit             = "[" [ expression { "," expression } ] "]" ;
+map_lit              = "{" [ map_item { "," map_item } ] "}" ;
+map_item             = ( string_lit | identifier ) ":" expression ;
+
+bool_lit             = "TRUE" | "FALSE" ;
+none_lit             = "NONE" ;
+
+(* Lexical terminals are defined by the lexer. *)
+identifier           = IDENTIFIER ;
+integer_lit          = INTEGER ;
+float_lit            = FLOAT ;
+string_lit           = STRING ;
+duration_lit         = DURATION ;
+size_lit             = SIZE ;
+confidence_lit       = CONFIDENCE ;
+hash_lit             = HASH ;
+
+terminator           = ";" | NEWLINE ;
+
+(* ---------- Strict NEWLINE Termination (Normative) ---------- *)
+(* 1. Lexer emits NEWLINE only when not inside (), [], or {} nesting. *)
+(* 2. Consecutive physical line breaks collapse to a single NEWLINE token. *)
+(* 3. Lexer suppresses NEWLINE after tokens that cannot end a statement:
+      "->" "|>" "=>" "." ":" "::" "," "(" "[" "{" "=" *)
+(* 4. Lexer suppresses NEWLINE before tokens that continue an expression:
+      "." "," "->" "|>" "::" ")" "]" "}" *)
+(* 5. Parser consumes NEWLINE only through `terminator`; no implicit insertion elsewhere. *)

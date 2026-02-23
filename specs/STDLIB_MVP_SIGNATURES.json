@@ -1,0 +1,37 @@
+{
+  "version": "mvp-0.1",
+  "canonicalResult": "Result[T] = SUCCESS(T) | FAILURE(ErrorCode, message: Str, details: FailureDetails)",
+  "modules": {
+    "core.data": {
+      "fallible": false,
+      "ops": ["FILTER", "MAP", "REDUCE", "SORT", "GROUP", "TAKE", "SKIP"]
+    },
+    "core.io": {
+      "fallible": true,
+      "ops": ["READ", "WRITE", "FETCH"]
+    },
+    "core.text": {
+      "fallible": true,
+      "ops": ["PARSE", "FORMAT", "REGEX", "TOKENIZE"]
+    },
+    "core.http": {
+      "fallible": true,
+      "ops": ["GET", "POST"]
+    },
+    "agent.llm": {
+      "fallible": true,
+      "ops": ["GENERATE", "CLASSIFY", "EXTRACT"]
+    },
+    "agent.memory": {
+      "fallible": true,
+      "ops": ["REMEMBER", "RECALL", "FORGET"]
+    }
+  },
+  "signatureRules": {
+    "fallibleReturn": "Result[T] only",
+    "pureReturn": "Bare T allowed only for core.data",
+    "failureArity": 3,
+    "failureShape": "FAILURE(ErrorCode, message: Str, details: FailureDetails)",
+    "noAnyInMVP": true
+  }
+}
