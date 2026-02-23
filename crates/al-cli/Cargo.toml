@@ -1,0 +1,13 @@
+[package]
+name = "al-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+al-diagnostics = { path = "../al-diagnostics" }
+al-ast = { path = "../al-ast" }
+al-lexer = { path = "../al-lexer" }
+al-parser = { path = "../al-parser" }
+al-types = { path = "../al-types" }
+al-capabilities = { path = "../al-capabilities" }
+al-runtime = { path = "../al-runtime" }
