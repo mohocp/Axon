@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/al-diagnostics",
+    "crates/al-ast",
+    "crates/al-lexer",
+    "crates/al-parser",
+    "crates/al-hir",
+    "crates/al-types",
+    "crates/al-vc",
+    "crates/al-capabilities",
+    "crates/al-runtime",
+    "crates/al-stdlib-mvp",
+    "crates/al-checkpoint",
+    "crates/al-conformance",
+    "crates/al-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"

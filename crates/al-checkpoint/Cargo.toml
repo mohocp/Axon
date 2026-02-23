@@ -1,0 +1,9 @@
+[package]
+name = "al-checkpoint"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+al-diagnostics = { path = "../al-diagnostics" }
+serde = { workspace = true }
+serde_json = { workspace = true }

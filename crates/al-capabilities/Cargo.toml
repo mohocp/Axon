@@ -1,0 +1,8 @@
+[package]
+name = "al-capabilities"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+al-diagnostics = { path = "../al-diagnostics" }
+serde = { workspace = true }

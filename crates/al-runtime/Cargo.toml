@@ -1,0 +1,16 @@
+[package]
+name = "al-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+al-diagnostics = { path = "../al-diagnostics" }
+al-ast = { path = "../al-ast" }
+al-hir = { path = "../al-hir" }
+al-types = { path = "../al-types" }
+al-capabilities = { path = "../al-capabilities" }
+al-checkpoint = { path = "../al-checkpoint" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
