@@ -389,6 +389,128 @@ fn c10_escalation_runtime() {
 }
 
 // ===========================================================================
+// C11: Match arm body — statement keywords after ->
+// ===========================================================================
+
+#[test]
+fn c11_match_body_statement_keywords() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C11").unwrap();
+
+    let program = parse_source(fixture.source).expect("C11: parsing should succeed");
+    assert_eq!(program.declarations.len(), 1);
+
+    if let al_ast::Declaration::OperationDecl { body, .. } = &program.declarations[0].node {
+        if let al_ast::Statement::Match { arms, otherwise, .. } = &body.node.stmts[0].node {
+            assert_eq!(arms.len(), 2, "C11: should have 2 WHEN arms");
+            // First arm: EMIT val (wrapped in synthetic block)
+            assert!(
+                matches!(arms[0].node.body.node, al_ast::MatchBody::Block(_)),
+                "C11: EMIT arm should be wrapped in block"
+            );
+            // Second arm: ESCALATE(msg)
+            assert!(
+                matches!(arms[1].node.body.node, al_ast::MatchBody::Block(_)),
+                "C11: ESCALATE arm should be wrapped in block"
+            );
+            // OTHERWISE: HALT
+            assert!(otherwise.is_some(), "C11: should have OTHERWISE");
+        } else {
+            panic!("C11: expected MATCH statement");
+        }
+    } else {
+        panic!("C11: expected OperationDecl");
+    }
+}
+
+// ===========================================================================
+// C12: Undefined type reference detection
+// ===========================================================================
+
+#[test]
+fn c12_undefined_type_detected() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C12").unwrap();
+
+    let _program = parse_source(fixture.source).expect("C12: parsing should succeed");
+    let checker = check_source(fixture.source).expect("C12: check_source should not error");
+    assert!(
+        checker.has_errors(),
+        "C12: undefined type reference should produce error"
+    );
+}
+
+#[test]
+fn c12_builtin_types_resolve() {
+    let source = r#"
+TYPE UserId = Int64
+SCHEMA User => { name: Str, id: Int64 }
+OPERATION GetUser =>
+  INPUT id: Int64
+  OUTPUT User
+  BODY { EMIT id }
+"#;
+    let checker = check_source(source).expect("should parse");
+    assert!(
+        !checker.has_errors(),
+        "C12: built-in and schema types should resolve"
+    );
+}
+
+// ===========================================================================
+// C13: Parser error recovery
+// ===========================================================================
+
+#[test]
+fn c13_parser_recovery() {
+    // Use parse_recovering to get partial results after errors.
+    // `OPERATION => BODY { }` is missing the name — a parse error.
+    let source = r#"
+TYPE Valid1 = Int64
+OPERATION => BODY { }
+TYPE Valid2 = Str
+"#;
+    let (program, diagnostics) = al_parser::parse_recovering(source);
+    assert_eq!(
+        program.declarations.len(),
+        2,
+        "C13: should recover 2 valid declarations"
+    );
+    assert!(
+        !diagnostics.is_empty(),
+        "C13: should have reported parse errors"
+    );
+}
+
+// ===========================================================================
+// C14: REQUIRE clause validation
+// ===========================================================================
+
+#[test]
+fn c14_require_valid_input_reference() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C14").unwrap();
+
+    let checker = check_source(fixture.source).expect("C14: should parse");
+    assert!(
+        !checker.has_errors(),
+        "C14: REQUIRE referencing input should not error"
+    );
+}
+
+#[test]
+fn c14_require_unknown_identifier() {
+    let source = r#"
+OPERATION Guarded =>
+  INPUT x: Int64
+  REQUIRE unknown_var GT 0
+  BODY { EMIT x }
+"#;
+    let checker = check_source(source).expect("should parse");
+    assert!(
+        checker.has_errors(),
+        "C14: REQUIRE with unknown identifier should error"
+    );
+}
+
+// ===========================================================================
 // Cross-cutting: all fixtures parse
 // ===========================================================================
 

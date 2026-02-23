@@ -207,5 +207,59 @@ TYPE Foo = Str
             should_typecheck: true,
             expected_declarations: Some(1),
         },
+        // C11: Match arm body — statement keywords directly after ->
+        Fixture {
+            id: "C11",
+            description: "Match arm body supports statement keywords (EMIT, ESCALATE, etc.) after ->",
+            source: r#"OPERATION HandleResult =>
+  INPUT result: Result[Int64]
+  BODY {
+    MATCH result => {
+      WHEN SUCCESS(val) -> EMIT val
+      WHEN FAILURE(code, msg, details) -> ESCALATE(msg)
+      OTHERWISE -> HALT(unknown)
+    }
+  }
+"#,
+            should_parse: true,
+            should_typecheck: true,
+            expected_declarations: Some(1),
+        },
+        // C12: Undefined type reference detection
+        Fixture {
+            id: "C12",
+            description: "Type checker rejects undefined type references",
+            source: r#"TYPE Foo = NonexistentType
+"#,
+            should_parse: true,
+            should_typecheck: false,
+            expected_declarations: Some(1),
+        },
+        // C13: Parser error recovery
+        Fixture {
+            id: "C13",
+            description: "Parser recovers from errors and continues parsing",
+            source: r#"TYPE Valid1 = Int64
+TYPE Valid2 = Str
+"#,
+            should_parse: true,
+            should_typecheck: true,
+            expected_declarations: Some(2),
+        },
+        // C14: REQUIRE clause validation
+        Fixture {
+            id: "C14",
+            description: "REQUIRE clause identifiers must reference operation inputs",
+            source: r#"OPERATION Guarded =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  BODY {
+    EMIT x
+  }
+"#,
+            should_parse: true,
+            should_typecheck: true,
+            expected_declarations: Some(1),
+        },
     ]
 }

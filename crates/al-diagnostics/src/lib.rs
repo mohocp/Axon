@@ -117,12 +117,15 @@ impl std::fmt::Display for ErrorCode {
 pub enum WarningCode {
     /// A capability alias has been deprecated and may be removed in a future version.
     CapAliasDeprecated,
+    /// A reference could not be resolved to a definition in the current compilation unit.
+    UnresolvedReference,
 }
 
 impl std::fmt::Display for WarningCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::CapAliasDeprecated => write!(f, "CAP_ALIAS_DEPRECATED"),
+            Self::UnresolvedReference => write!(f, "UNRESOLVED_REFERENCE"),
         }
     }
 }

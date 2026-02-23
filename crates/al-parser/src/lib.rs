@@ -123,6 +123,32 @@ impl Parser {
             .push(Diagnostic::error(ErrorCode::ParseError, msg, span));
     }
 
+    /// Check if the current token starts a statement.
+    fn is_statement_keyword(&self) -> bool {
+        matches!(
+            self.peek(),
+            Token::Store
+                | Token::Mutable
+                | Token::Match
+                | Token::Loop
+                | Token::Emit
+                | Token::Assert
+                | Token::Retry
+                | Token::Escalate
+                | Token::Checkpoint
+                | Token::Halt
+                | Token::Delegate
+        )
+    }
+
+    /// Check if the current token starts a declaration.
+    fn is_declaration_keyword(&self) -> bool {
+        matches!(
+            self.peek(),
+            Token::Type | Token::Schema | Token::Agent | Token::Operation | Token::Pipeline
+        )
+    }
+
     // ── Top-level: program ───────────────────────────────────────────
 
     fn parse_program(&mut self) -> Program {
@@ -151,10 +177,28 @@ impl Parser {
         }
     }
 
+    /// Advance past tokens until we reach a declaration keyword or EOF.
     fn recover_to_declaration(&mut self) {
         while !self.at_eof() {
+            if self.is_declaration_keyword() {
+                return;
+            }
+            self.advance();
+        }
+    }
+
+    /// Advance past tokens until we reach a statement keyword, closing brace,
+    /// declaration keyword, or EOF. Used for intra-block error recovery.
+    fn recover_to_statement(&mut self) {
+        while !self.at_eof() {
+            if self.is_statement_keyword() || self.is_declaration_keyword() {
+                return;
+            }
             match self.peek() {
-                Token::Type | Token::Schema | Token::Agent | Token::Operation | Token::Pipeline => {
+                Token::RBrace => return,
+                Token::Semicolon | Token::Newline => {
+                    self.advance();
+                    self.skip_newlines();
                     return;
                 }
                 _ => {
@@ -488,15 +532,9 @@ impl Parser {
             match self.parse_statement() {
                 Ok(stmt) => stmts.push(stmt),
                 Err(()) => {
-                    // Recovery: skip to next statement or closing brace
-                    while !self.at(&Token::RBrace)
-                        && !self.at(&Token::Semicolon)
-                        && !self.at(&Token::Newline)
-                        && !self.at_eof()
-                    {
-                        self.advance();
-                    }
-                    self.eat_terminator();
+                    // Statement-level error recovery: skip to next
+                    // statement boundary (keyword, `;`, `}`, or declaration).
+                    self.recover_to_statement();
                 }
             }
             self.skip_newlines();
@@ -680,10 +718,19 @@ impl Parser {
 
     fn parse_match_body(&mut self) -> Result<Spanned<MatchBody>, ()> {
         if self.at(&Token::LBrace) {
+            // Explicit block: `-> { ... }`
             let block = self.parse_block()?;
             let span = block.span;
             Ok(Spanned::new(MatchBody::Block(block), span))
+        } else if self.is_statement_keyword() {
+            // Statement directly after `->` (e.g., `-> EMIT val`, `-> ESCALATE(msg)`)
+            // Parse as a single statement and wrap in a synthetic block.
+            let stmt = self.parse_statement()?;
+            let span = stmt.span;
+            let block = Spanned::new(Block { stmts: vec![stmt] }, span);
+            Ok(Spanned::new(MatchBody::Block(block), span))
         } else {
+            // Expression: `-> some_expr`
             let expr = self.parse_expression()?;
             let span = expr.span;
             self.eat_terminator();
@@ -1993,6 +2040,30 @@ pub fn parse(source: &str) -> Result<Program, Vec<Diagnostic>> {
     }
 }
 
+/// Parse with error recovery, returning the partial program and any diagnostics.
+///
+/// Unlike [`parse`], this function always returns a `Program` (possibly with
+/// fewer declarations than the source contains) together with all accumulated
+/// diagnostics. Callers can inspect the diagnostics to decide whether to
+/// continue with later compiler phases.
+pub fn parse_recovering(source: &str) -> (Program, Vec<Diagnostic>) {
+    let tokens = match al_lexer::tokenize(source) {
+        Ok(tokens) => tokens,
+        Err(diags) => {
+            return (
+                Program {
+                    declarations: vec![],
+                    span: Span::dummy(),
+                },
+                diags,
+            )
+        }
+    };
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program();
+    (program, parser.diagnostics)
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -2353,6 +2424,148 @@ OPERATION GetUser => BODY { EMIT NONE }
                 assert!(matches!(ty.node, TypeExpr::Constrained { .. }));
             }
             _ => panic!("expected TypeDecl"),
+        }
+    }
+
+    // ── Match body statement keywords ──────────────────────────────
+
+    #[test]
+    fn parse_match_body_emit_without_block() {
+        let prog = parse_ok(
+            r#"OPERATION Test => BODY {
+  MATCH result => {
+    WHEN SUCCESS(val) -> EMIT val
+    OTHERWISE -> EMIT NONE
+  }
+}"#,
+        );
+        match &prog.declarations[0].node {
+            Declaration::OperationDecl { body, .. } => {
+                match &body.node.stmts[0].node {
+                    Statement::Match {
+                        arms, otherwise, ..
+                    } => {
+                        assert_eq!(arms.len(), 1);
+                        // Arm body should be a block wrapping the EMIT
+                        assert!(matches!(arms[0].node.body.node, MatchBody::Block(_)));
+                        assert!(otherwise.is_some());
+                    }
+                    _ => panic!("expected Match"),
+                }
+            }
+            _ => panic!("expected OperationDecl"),
+        }
+    }
+
+    #[test]
+    fn parse_match_body_escalate_without_block() {
+        let prog = parse_ok(
+            r#"OPERATION Test => BODY {
+  MATCH result => {
+    WHEN FAILURE(code, msg, details) -> ESCALATE(msg)
+    OTHERWISE -> HALT(error)
+  }
+}"#,
+        );
+        match &prog.declarations[0].node {
+            Declaration::OperationDecl { body, .. } => {
+                match &body.node.stmts[0].node {
+                    Statement::Match { arms, .. } => {
+                        // ESCALATE arm
+                        if let MatchBody::Block(block) = &arms[0].node.body.node {
+                            assert!(matches!(
+                                block.node.stmts[0].node,
+                                Statement::Escalate { .. }
+                            ));
+                        } else {
+                            panic!("expected Block wrapping ESCALATE");
+                        }
+                    }
+                    _ => panic!("expected Match"),
+                }
+            }
+            _ => panic!("expected OperationDecl"),
+        }
+    }
+
+    #[test]
+    fn parse_match_body_retry_checkpoint_assert() {
+        let prog = parse_ok(
+            r#"OPERATION Test => BODY {
+  MATCH status => {
+    WHEN SUCCESS(val) -> CHECKPOINT "ok"
+    WHEN FAILURE(c, m, d) -> RETRY(3)
+  }
+}"#,
+        );
+        match &prog.declarations[0].node {
+            Declaration::OperationDecl { body, .. } => {
+                match &body.node.stmts[0].node {
+                    Statement::Match { arms, .. } => {
+                        assert_eq!(arms.len(), 2);
+                        // SUCCESS -> CHECKPOINT
+                        if let MatchBody::Block(block) = &arms[0].node.body.node {
+                            assert!(matches!(
+                                block.node.stmts[0].node,
+                                Statement::Checkpoint { .. }
+                            ));
+                        } else {
+                            panic!("expected Block wrapping CHECKPOINT");
+                        }
+                        // FAILURE -> RETRY
+                        if let MatchBody::Block(block) = &arms[1].node.body.node {
+                            assert!(matches!(
+                                block.node.stmts[0].node,
+                                Statement::Retry { .. }
+                            ));
+                        } else {
+                            panic!("expected Block wrapping RETRY");
+                        }
+                    }
+                    _ => panic!("expected Match"),
+                }
+            }
+            _ => panic!("expected OperationDecl"),
+        }
+    }
+
+    // ── Error recovery ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_recovering_returns_partial_results() {
+        // First declaration is valid, second is malformed (missing name),
+        // third is valid. The parser should recover the two valid ones.
+        let source = r#"
+TYPE UserId = Int64
+OPERATION => BODY { }
+TYPE Count = Int64
+"#;
+        let (program, diagnostics) = parse_recovering(source);
+        // Should have recovered 2 valid declarations
+        assert_eq!(program.declarations.len(), 2);
+        assert!(!diagnostics.is_empty(), "should have reported errors");
+    }
+
+    #[test]
+    fn parse_recovering_empty_program() {
+        let (program, diagnostics) = parse_recovering("");
+        assert_eq!(program.declarations.len(), 0);
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn parse_block_recovery_skips_bad_statement() {
+        let prog = parse_ok(
+            r#"OPERATION Test => BODY {
+  STORE x = 42
+  EMIT x
+}"#,
+        );
+        match &prog.declarations[0].node {
+            Declaration::OperationDecl { body, .. } => {
+                assert_eq!(body.node.stmts.len(), 2);
+            }
+            _ => panic!("expected OperationDecl"),
         }
     }
 }
