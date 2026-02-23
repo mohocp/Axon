@@ -1,0 +1,9 @@
+[package]
+name = "al-parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+al-diagnostics = { path = "../al-diagnostics" }
+al-ast = { path = "../al-ast" }
+al-lexer = { path = "../al-lexer" }
