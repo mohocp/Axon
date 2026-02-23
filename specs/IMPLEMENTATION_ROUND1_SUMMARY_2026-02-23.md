@@ -110,3 +110,94 @@ Test breakdown by crate:
 8. **Error recovery:** Parser should attempt to continue after errors to report multiple issues
 9. **Stdlib integration:** Wire al-stdlib-mvp into the runtime for built-in operation dispatch
 10. **CI/CD:** GitHub Actions workflow for cargo check + cargo test + cargo clippy
+
+---
+
+## Round 2 — Implementation Summary
+
+**Date:** 2026-02-24
+**Focus:** P1/P2 issues from Codex review
+
+### Changes Implemented
+
+#### 1. Parser Error Recovery & Synchronization (P1 #1)
+- Added `is_statement_keyword()` and `is_declaration_keyword()` helpers
+- Added `recover_to_statement()` method for intra-block error recovery (synchronizes on statement keywords, `;`, `}`, or declaration keywords)
+- Improved `parse_block()` to use structured statement-level recovery instead of ad-hoc token skipping
+- Added `parse_recovering()` public API that returns `(Program, Vec<Diagnostic>)` — always returns partial results with diagnostics
+- **6 new parser tests** covering recovery and new match body support
+
+#### 2. Match Arm Body Statement Support (P1 #2, P2 #4)
+- Rewrote `parse_match_body()` to recognize statement keywords (EMIT, ESCALATE, RETRY, HALT, CHECKPOINT, ASSERT, STORE, MATCH, LOOP, DELEGATE) directly after `->` without requiring block braces
+- Statement keywords are parsed as a single statement and wrapped in a synthetic block, preserving AST compatibility
+- **Tests:** `parse_match_body_emit_without_block`, `parse_match_body_escalate_without_block`, `parse_match_body_retry_checkpoint_assert`
+
+#### 3. Type Reference Resolution (P1 #3)
+- Added `BUILTIN_TYPES` constant (22 built-in type names: Int64, Float64, Str, Bool, List, Map, Set, Result, Option, Duration, Size, Confidence, Hash, Record, Any, Unit, Void, Int, Float, String, Bytes)
+- Added Pass 4: `resolve_type_references()` — walks all type expressions in TYPE, SCHEMA, and OPERATION declarations
+- `check_type_expr()` recursively verifies Named, Union, Constrained, and Record types
+- Respects generic type parameters in scope (e.g., `TYPE Wrapper[T] = List[T]` — `T` is not flagged)
+- Schema names are valid type references (e.g., `OUTPUT User` where `User` is a schema)
+- Emits `UNKNOWN_IDENTIFIER` errors for undefined type references
+- **5 new type checker tests**
+
+#### 4. REQUIRE Clause Validation (P2 #5)
+- Added Pass 5: `check_require_clauses()` — walks REQUIRE expressions on operations
+- `check_require_expr()` recursively checks that top-level identifiers reference operation inputs
+- Function call names are exempted (may be stdlib functions)
+- Member access bases are checked (e.g., `data.fields` — `data` must be an input)
+- **2 new type checker tests**
+
+#### 5. Pipeline/Fork Reference Resolution (P2 #6, #7)
+- Added Pass 6: `resolve_pipeline_fork_references()` — checks pipeline stages and fork branches
+- Pipeline stages that are bare identifiers are checked against the operation table
+- Fork branch pipeline chains are similarly checked
+- Emits `UNRESOLVED_REFERENCE` **warnings** (not errors) since stages may reference stdlib functions
+- **2 new type checker tests**
+
+#### 6. Diagnostics
+- Added `WarningCode::UnresolvedReference` to al-diagnostics for pipeline/fork warnings
+- All new diagnostics use deterministic error codes aligned with conformance docs
+- Error codes: `UNKNOWN_IDENTIFIER` for type/require errors, `UNRESOLVED_REFERENCE` (warning) for pipeline/fork
+
+#### 7. New Conformance Fixtures (C11-C14)
+| Fixture | Description | Tests |
+|---------|-------------|-------|
+| C11 | Match arm body: statement keywords after `->` | 1 |
+| C12 | Undefined type reference detection | 2 (undefined + builtin) |
+| C13 | Parser error recovery | 1 |
+| C14 | REQUIRE clause validation | 2 (valid + unknown) |
+
+### Build & Test Status
+
+```
+cargo check:  OK  (3 pre-existing warnings: unused imports in al-diagnostics, al-capabilities, al-checkpoint)
+cargo test:   265 passed, 0 failed  (+16 from Round 1's 249)
+
+Test breakdown by crate:
+  al-lexer         95
+  al-capabilities  33  (+ 3 doc-tests)
+  al-runtime       31
+  al-conformance   27  (was 21; +6 new integration tests)
+  al-parser        26  (was 20; +6 new unit tests)
+  al-diagnostics   16
+  al-types         16  (was 7; +9 new unit tests)
+  al-hir            5
+  al-stdlib-mvp     5
+  al-checkpoint     4
+  al-vc             4
+  al-ast            0  (types only)
+  al-cli            0  (binary)
+```
+
+### What Remains (Round 3+)
+
+1. **Full type inference:** Infer expression types, propagate through assignments and function calls
+2. **Pipeline type propagation:** Check that operation output types chain correctly in pipelines
+3. **HIR enrichment:** Populate `ty` and `required_caps` in HirMeta during type checking
+4. **VC generation:** Wire `al-vc` for ASSERT/REQUIRE verification conditions
+5. **Runtime interpreter:** Execute AST/HIR programs end-to-end
+6. **Excluded feature rejection:** SPAWN, CHANNEL, non-MVP constructs
+7. **CLI improvements:** REPL, file watching, diagnostic formatting with source snippets
+8. **Stdlib integration:** Wire al-stdlib-mvp into runtime
+9. **CI/CD:** GitHub Actions for cargo check/test/clippy

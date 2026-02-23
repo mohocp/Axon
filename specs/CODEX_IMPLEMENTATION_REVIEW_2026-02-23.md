@@ -1,89 +1,115 @@
-# AgentLang MVP Round 1 — Code Review
+# AgentLang MVP Round 2 — Code Review
 
-**Date:** 2026-02-23
+**Date:** 2026-02-24 (updated from 2026-02-23 Round 1 review)
 **Reviewer:** Claude (independent review pass)
-**Scope:** All code produced in Round 1 implementation
+**Scope:** All code produced through Round 2 implementation
 
 ---
 
-## Issues
+## Status of Round 1 Issues
 
-### P1 — Critical / Must Fix
+### P1 — Critical (Round 1) → Status
 
-1. **No parser error recovery.** The parser aborts on the first error (`self.error()` returns `Err(())` and propagates up). Any single syntax error prevents parsing the rest of the file. Real-world usage requires synchronisation (skip to next declaration/statement boundary).
+1. **~~No parser error recovery.~~** ✅ FIXED. Added `recover_to_statement()` and `recover_to_declaration()` methods. `parse_block()` now uses structured statement-level recovery. New `parse_recovering()` API returns partial program with diagnostics.
 
-2. **Match arm bodies require block syntax for statements.** `WHEN SUCCESS(val) -> EMIT val` doesn't parse because `EMIT` is a keyword, not an expression. The workaround (`-> { EMIT val }`) deviates from what the spec likely intends. The parser's `parse_match_body` should handle statement-or-expression after `->`.
+2. **~~Match arm bodies require block syntax for statements.~~** ✅ FIXED. `parse_match_body()` now detects statement keywords (EMIT, ESCALATE, RETRY, HALT, CHECKPOINT, ASSERT, etc.) after `->` and wraps them in a synthetic block. `WHEN SUCCESS(val) -> EMIT val` now parses correctly.
 
-3. **Type checker does not verify type references.** `TYPE Foo = Bar` compiles even if `Bar` is never defined. The declaration table is built but never consulted for reference resolution. Undefined type references should emit `UNDEFINED_REFERENCE` errors.
+3. **~~Type checker does not verify type references.~~** ✅ FIXED. Added Pass 4 (`resolve_type_references`) with 22 built-in types. Walks TYPE, SCHEMA, OPERATION declarations. Generic type parameters are tracked in scope. Emits `UNKNOWN_IDENTIFIER` for undefined references.
+
+### P2 — Important (Round 1) → Status
+
+4. **~~ESCALATE in MATCH body requires block wrapper.~~** ✅ FIXED. Same fix as #2 — all statement keywords are recognized in match bodies.
+
+5. **~~REQUIRE clauses not type-checked.~~** ✅ FIXED. Added Pass 5 (`check_require_clauses`) that validates identifiers in REQUIRE expressions against operation inputs.
+
+6. **~~Pipeline type propagation absent.~~** ⚠️ PARTIAL. Added Pass 6 with warning-level reference resolution. Pipeline stages that are bare identifiers are checked against the operation table. Full output→input type chaining is deferred to Round 3.
+
+7. **~~Fork branch names unresolved.~~** ⚠️ PARTIAL. Fork branch pipeline chains are now checked for operation references (warning level). Semantic validation of fork branch types is deferred.
+
+8. **HIR lowering discards expression details.** ❌ NOT ADDRESSED. Still only captures variable names/counts. Deferred to Round 3 HIR enrichment.
+
+9. **`parse_fork_expr` span arithmetic unvalidated.** ❌ NOT ADDRESSED. Low risk — spans are computed from actual token positions.
+
+### P3 — Minor (Round 1) → Status
+
+10. **Unused `al-capabilities` dependency in `al-types`.** ❌ NOT ADDRESSED. Cosmetic.
+11. **CLI capability check hardcoded.** ❌ NOT ADDRESSED.
+12. **No `Display` impl for AST nodes.** ❌ NOT ADDRESSED.
+13. **`check_source` swallows type errors.** By design — documented.
+14. **Three unused-import warnings.** ❌ NOT ADDRESSED. Pre-existing.
+15. **Binding power starting at 0.** ❌ NOT ADDRESSED. Not a bug.
+16. **`NONE` keyword handling.** ✅ Already handled — `Token::None` has a case in `parse_primary`.
+
+---
+
+## New Issues Found in Round 2
+
+### P1 — Critical
+
+*(None — no new P1 issues introduced.)*
 
 ### P2 — Important
 
-4. **`ESCALATE(msg)` inside MATCH body requires block wrapper.** Same root cause as #2 — ESCALATE is a keyword token. The parser should recognise statement keywords (EMIT, ESCALATE, RETRY, HALT, CHECKPOINT, ASSERT) as valid match body starts, not just expressions and blocks.
+17. **REQUIRE identifier check is strict but context-limited.** The REQUIRE validator flags any top-level identifier that isn't an operation input, but doesn't know about `STORE` bindings in scope or schema field references. `REQUIRE compute(data) GT 0` works (function calls are exempted), but `REQUIRE threshold GT 0` where `threshold` is a STORE binding from a prior operation would incorrectly flag. This is acceptable for MVP since REQUIRE runs before BODY, but the limitation should be documented.
 
-5. **`REQUIRE` clauses not type-checked.** The parser correctly parses REQUIRE conditions on operations, but the type checker ignores them entirely. The condition expressions should be validated.
+18. **Pipeline/fork reference warnings use `WarningCode::UnresolvedReference`.** This is a new warning code but currently doesn't have a serde roundtrip test. The existing `all_error_codes_roundtrip` test doesn't cover warning codes beyond `CapAliasDeprecated`.
 
-6. **Pipeline type propagation absent.** `PIPELINE DataFlow => fetch -> validate |> transform -> store` is parsed correctly, but there is no check that `fetch`, `validate`, `transform`, `store` refer to defined operations, or that their input/output types chain correctly.
+19. **`parse_recovering` does not recover from lex errors.** If `al_lexer::tokenize` returns `Err`, `parse_recovering` returns an empty program. True recovery would require a fault-tolerant lexer or per-line re-lexing. This is a known limitation.
 
-7. **Fork branch names unresolved.** `FORK { a: fetch, b: validate }` parses the named branches, but there's no check that `fetch` and `validate` are defined operations.
+20. **Type reference check does not track forward declarations.** `TYPE Foo = Bar` where `Bar` is defined later in the same file will fail because `build_declarations` runs sequentially and `resolve_type_references` checks against the complete table. Wait — actually this works because `build_declarations` builds the full table first, then `resolve_type_references` runs as a separate pass. ✅ No issue.
 
-8. **HIR lowering discards expression details.** `lower_statement` for `Statement::Store { .. }` only captures the variable name, losing the initialiser expression entirely. Similarly, `Match` only captures arm count, losing pattern/body information. This makes HIR unsuitable for a future interpreter or code generator without re-consulting the AST.
+### P3 — Minor
 
-9. **`parse_fork_expr` uses span arithmetic but doesn't validate.** The fork expression builds spans from `start` captured before parsing. If the parser backtracks or errors during fork body parsing, the span could be incorrect.
+21. **`BUILTIN_TYPES` list may need expansion.** The current list (22 entries) covers common types but may miss domain-specific types as the language evolves. The list should be extracted into a shared constant or configuration.
 
-### P3 — Minor / Enhancement
+22. **Warning for unresolved pipeline stages could be noisy.** Every fixture with a pipeline (C1, C6) generates warnings for stage names like `fetch`, `validate`, `transform`. These are expected in test contexts but may confuse real users. Consider a `--strict` flag or separate lint pass.
 
-10. **Unused `al-capabilities` dependency in `al-types`.** `Cargo.toml` lists `al-capabilities` as a dependency, but the type checker never uses it. This adds unnecessary compilation.
-
-11. **CLI `cmd_run` capability check is hardcoded.** It creates a `CapabilitySet::all()` for every agent, which means capability checking always succeeds. Real checking needs to use the agent's declared capabilities.
-
-12. **No `Display` impl for AST nodes.** Pretty-printing relies on `{:?}` (Debug), which produces Rust-internal formatting. A proper `Display` implementation would improve CLI output and diagnostics.
-
-13. **`check_source` in al-conformance swallows type errors.** It returns `Ok(checker)` even when `checker.has_errors()` is true. This is by design (callers inspect `has_errors()`), but the API is surprising — callers might expect `Err` on type errors.
-
-14. **Three unused-import warnings in pre-existing crates.** `DateTime` in al-diagnostics, `Severity` in al-capabilities, `Span` in al-checkpoint. These are cosmetic but should be cleaned.
-
-15. **`parse_expression_bp` minimum binding power starts at 0.** The precedence climbing implementation uses `min_bp: u8` starting at 0, which works but means all operators must have bp >= 1. This isn't documented and could confuse future contributors.
-
-16. **`NONE` keyword parsed as identifier.** In expression context, `NONE` is lexed as a keyword token but the parser's `parse_primary` doesn't handle it, falling through to an error or treating it as an identifier depending on context.
+23. **Synthetic block spans reuse the statement span.** When a match body statement is wrapped in a synthetic block, the block's span is identical to the statement's span. This is correct for error reporting but could confuse span-based tooling that expects blocks to have `{`/`}` positions.
 
 ---
 
-## Enhancements
+## Metrics
+
+| Metric | Round 1 | Round 2 | Delta |
+|--------|---------|---------|-------|
+| Total tests | 249 | 265 | +16 |
+| al-parser tests | 20 | 26 | +6 |
+| al-types tests | 7 | 16 | +9 |
+| al-conformance tests | 21 | 27 | +6 |
+| Conformance fixtures | C1–C10 | C1–C14 | +4 |
+| Type checker passes | 3 | 6 | +3 |
+| Compilation warnings | 3 | 3 | 0 |
+
+---
+
+## Enhancements (carried from Round 1 + new)
 
 ### Architecture
-
-- **Add a `Session` or `CompilationUnit` struct** that threads source text, AST, HIR, type env, and diagnostics through the pipeline. Currently the CLI manually passes data between stages.
-
-- **Introduce a `Visitor` trait for AST/HIR traversal** instead of manual recursive `match` in every pass. This would simplify type checking, capability inference, and future lint passes.
-
-- **Consider making Diagnostic implement `std::error::Error`** so it integrates with Rust's `?` operator and `anyhow`/`thiserror` patterns.
+- Add a `Session`/`CompilationUnit` struct threading source, AST, HIR, type env, diagnostics
+- Introduce a `Visitor` trait for AST/HIR traversal
+- Extract `BUILTIN_TYPES` into a shared constant or config
 
 ### Testing
-
-- **Add property-based tests** (e.g. via `proptest`) for the lexer and parser: generate random valid AgentLang programs and verify round-trip (source → tokens → AST → pretty-print → tokens → AST).
-
-- **Add negative conformance fixtures** (C11+): programs that should be rejected (e.g., SPAWN, CHANNEL, non-MVP join strategies, malformed FAILURE patterns with wrong arity).
-
-- **Add integration tests for CLI binary** using `assert_cmd` or similar, testing actual `al-cli lex/parse/check/run` invocations on fixture files.
+- Add `proptest` property-based tests for lexer/parser
+- Add negative conformance fixtures (C15+): SPAWN, CHANNEL, malformed FAILURE arity
+- Add CLI integration tests (`assert_cmd`)
+- Add serde roundtrip test for `WarningCode::UnresolvedReference`
 
 ### Performance
-
-- **Intern strings** in the AST (use a string interner like `lasso` or `string-interner`). Currently every identifier/type name is a separate `String` allocation. For large programs this adds up.
-
-- **Consider arena allocation** for AST/HIR nodes (e.g. `bumpalo`) to reduce allocator pressure during parsing.
+- String interning for identifiers
+- Arena allocation for AST/HIR nodes
 
 ### Developer Experience
-
-- **Add `cargo clippy` to CI** — there are likely additional warnings beyond the unused imports.
-
-- **Add `#[must_use]` annotations** on functions like `parse()`, `check()`, `lex_source()` that return `Result`.
-
-- **Document the EBNF-to-parser mapping** — each parser function should reference the grammar rule it implements (e.g., `// Grammar: statement ::= STORE ...`).
+- `cargo clippy` in CI
+- `#[must_use]` on `parse()`, `check()`, etc.
+- Document EBNF-to-parser mapping in comments
 
 ---
 
 ## Summary
 
-Round 1 delivers a working end-to-end pipeline: lex → parse → type-check (basic) → HIR lowering. The parser handles the full MVP grammar and all 10 conformance fixtures pass. The most critical gap is parser error recovery (#1) and the match body statement/expression ambiguity (#2/#4). The type checker is shallow — it catches duplicates but doesn't resolve references or check type compatibility. These are natural targets for Round 2.
+Round 2 addressed all 3 P1 critical issues and 3 of 6 P2 important issues from the Round 1 review. The parser now has multi-level error recovery (declaration and statement boundaries), match arm bodies accept statement keywords directly, and the type checker resolves type references, validates REQUIRE clauses, and warns on unresolved pipeline/fork references. 265 tests pass with 0 failures. 4 new conformance fixtures (C11–C14) validate the new functionality.
 
-**Verdict:** Solid foundation. 249 tests passing. Ready to build on.
+**Remaining high-priority items:** Full type inference, pipeline type propagation, HIR enrichment, and VC generation. These are natural targets for Round 3.
+
+**Verdict:** Solid progress. All P1 issues resolved. Foundation ready for type inference and runtime interpreter work.
