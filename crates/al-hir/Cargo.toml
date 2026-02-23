@@ -1,0 +1,10 @@
+[package]
+name = "al-hir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+al-diagnostics = { path = "../al-diagnostics" }
+al-ast = { path = "../al-ast" }
+al-parser = { path = "../al-parser" }
+serde = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "al-types"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+al-diagnostics = { path = "../al-diagnostics" }
+al-ast = { path = "../al-ast" }
+al-capabilities = { path = "../al-capabilities" }
+
+[dev-dependencies]
+al-parser = { path = "../al-parser" }
