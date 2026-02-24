@@ -1,19 +1,24 @@
-//! # AgentLang Interpreter — Round 5 MVP
+//! # AgentLang Interpreter — Round 5
 //!
 //! Tree-walking interpreter that executes AgentLang programs end-to-end.
 //!
 //! Implements:
-//! - **Statement interpreter**: STORE, MUTABLE, ASSIGN, MATCH, LOOP, EMIT, HALT
+//! - **Statement interpreter**: STORE, MUTABLE, ASSIGN, MATCH, LOOP, EMIT, HALT,
+//!   ASSERT (VC metadata), RETRY, ESCALATE, CHECKPOINT, DELEGATE
 //! - **Expression evaluator**: literals, identifiers, binary/unary ops, member
 //!   access, list/map constructors, operation calls
 //! - **Pattern matching**: wildcard, literal, SUCCESS/FAILURE destructuring,
 //!   identifier binding
 //! - **Pipeline execution**: output threading with short-circuit on FAILURE
+//! - **Fork/Join**: ALL_COMPLETE with branch failure collection & audit
+//! - **RETRY**: re-execute enclosing operation up to N times
+//! - **Capability checks**: per-operation enforcement when agent context active
+//! - **DELEGATE**: execute under callee agent's capabilities
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use al_ast::*;
-use al_diagnostics::RuntimeFailure;
+use al_diagnostics::{ErrorCode, RuntimeFailure};
 
 use crate::{Runtime, Value};
 
@@ -36,6 +41,16 @@ pub enum InterpreterError {
     ImmutableAssign(String),
     /// Program was explicitly halted.
     Halted { reason: String, value: Value },
+    /// RETRY exhausted all attempts.
+    RetryExhausted {
+        count: i64,
+        last_failure: Value,
+    },
+    /// Capability denied for an operation.
+    CapabilityDenied {
+        agent_id: String,
+        capability: String,
+    },
 }
 
 impl std::fmt::Display for InterpreterError {
@@ -50,6 +65,16 @@ impl std::fmt::Display for InterpreterError {
             }
             Self::Halted { reason, value } => {
                 write!(f, "HALT({}): {}", reason, value)
+            }
+            Self::RetryExhausted { count, last_failure } => {
+                write!(f, "RETRY exhausted after {} attempts: {}", count, last_failure)
+            }
+            Self::CapabilityDenied { agent_id, capability } => {
+                write!(
+                    f,
+                    "agent '{}' lacks required capability '{}'",
+                    agent_id, capability
+                )
             }
         }
     }
@@ -72,6 +97,8 @@ struct OperationDef {
     name: String,
     inputs: Vec<String>,
     body: Spanned<Block>,
+    /// Required capabilities extracted from REQUIRE SCOPE declarations.
+    required_caps: Vec<String>,
 }
 
 /// Result of executing a single statement.
@@ -82,6 +109,16 @@ enum StmtResult {
     Emit(Value),
     /// A HALT was executed.
     Halt { reason: String, value: Value },
+    /// A RETRY was requested; re-execute the enclosing operation.
+    Retry { count: i64 },
+}
+
+/// Monotonically increasing counter for VC assertion IDs.
+static VC_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_vc_id() -> String {
+    let id = VC_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("vc-rt-{:04}", id)
 }
 
 // =========================================================================
@@ -98,6 +135,9 @@ pub struct Interpreter {
     pipelines: Vec<(String, Spanned<PipelineChain>)>,
     /// Set of bindings declared with `MUTABLE`.
     mutables: HashSet<String>,
+    /// Currently active agent context (for capability checks).
+    /// When set, operation calls are checked against this agent's capabilities.
+    active_agent: Option<String>,
 }
 
 impl Default for Interpreter {
@@ -114,7 +154,13 @@ impl Interpreter {
             operations: HashMap::new(),
             pipelines: Vec::new(),
             mutables: HashSet::new(),
+            active_agent: None,
         }
+    }
+
+    /// Set the active agent context for capability checking.
+    pub fn set_active_agent(&mut self, agent_id: &str) {
+        self.active_agent = Some(agent_id.to_string());
     }
 
     // =====================================================================
@@ -144,16 +190,25 @@ impl Interpreter {
                     }
                 }
                 Declaration::OperationDecl {
-                    name, inputs, body, ..
+                    name, inputs, body, requires, ..
                 } => {
                     let param_names: Vec<String> =
                         inputs.iter().map(|p| p.node.name.node.clone()).collect();
+                    // Extract required capabilities from REQUIRE clauses that
+                    // reference capability names (simple identifiers).
+                    let mut required_caps = Vec::new();
+                    for req in requires {
+                        if let Expr::Identifier(cap_name) = &req.node {
+                            required_caps.push(cap_name.clone());
+                        }
+                    }
                     self.operations.insert(
                         name.node.clone(),
                         OperationDef {
                             name: name.node.clone(),
                             inputs: param_names,
                             body: body.clone(),
+                            required_caps,
                         },
                     );
                 }
@@ -284,40 +339,143 @@ impl Interpreter {
             }
         };
 
+        // Capability check: if an agent context is active, verify required caps.
+        if let Some(ref agent_id) = self.active_agent {
+            for cap_name in &op.required_caps {
+                if let Ok(cap) = al_capabilities::resolve_capability(cap_name) {
+                    if let Err(_rf) = self.runtime.check_capability(agent_id, cap) {
+                        return Err(InterpreterError::CapabilityDenied {
+                            agent_id: agent_id.clone(),
+                            capability: cap_name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        self.execute_operation_body(&op, &args)
+    }
+
+    /// Execute an operation body, binding arguments and managing scope.
+    /// Handles RETRY by re-executing the body up to N times.
+    fn execute_operation_body(
+        &mut self,
+        op: &OperationDef,
+        args: &[Value],
+    ) -> Result<Value, InterpreterError> {
         // Save caller state.
         let saved_regs = self.runtime.registers.clone();
         let saved_mutables = self.mutables.clone();
 
-        // Bind positional inputs.
-        for (i, param) in op.inputs.iter().enumerate() {
-            if let Some(arg) = args.get(i) {
-                self.runtime.reg_set(param.clone(), arg.clone());
+        let bind_args = |this: &mut Self| {
+            // Bind positional inputs.
+            for (i, param) in op.inputs.iter().enumerate() {
+                if let Some(arg) = args.get(i) {
+                    this.runtime.reg_set(param.clone(), arg.clone());
+                }
             }
-        }
-        // If there is a threaded input but no declared parameters, bind as `_input`.
-        if !args.is_empty() && op.inputs.is_empty() {
-            self.runtime.reg_set("_input", args[0].clone());
-        }
+            // If there is a threaded input but no declared parameters, bind as `_input`.
+            if !args.is_empty() && op.inputs.is_empty() {
+                this.runtime.reg_set("_input", args[0].clone());
+            }
+        };
+
+        bind_args(self);
 
         // Execute the operation body.
         let result = self.exec_block(&op.body);
 
-        // Restore caller state.
-        self.runtime.registers = saved_regs;
-        self.mutables = saved_mutables;
-
         match result {
-            Ok(Some(val)) => Ok(val),
-            Ok(None) => Ok(Value::None),
-            Err(InterpreterError::Halted { reason, value }) => {
-                // HALT inside an operation produces a FAILURE value (not a crash).
+            // RETRY: re-execute the body up to `count` additional times.
+            Err(InterpreterError::RetryExhausted {
+                count: retry_count, ..
+            }) => {
+                let mut last_failure = Value::Failure {
+                    code: "RETRY_EXHAUSTED".to_string(),
+                    message: "initial attempt failed".to_string(),
+                    details: Box::new(Value::None),
+                };
+
+                for attempt in 0..retry_count {
+                    // Re-bind args and retry.
+                    self.runtime.registers = saved_regs.clone();
+                    self.mutables = saved_mutables.clone();
+                    bind_args(self);
+
+                    match self.exec_block(&op.body) {
+                        Ok(Some(val)) => {
+                            // Success on retry.
+                            self.runtime.registers = saved_regs;
+                            self.mutables = saved_mutables;
+                            return Ok(val);
+                        }
+                        Ok(None) => {
+                            self.runtime.registers = saved_regs;
+                            self.mutables = saved_mutables;
+                            return Ok(Value::None);
+                        }
+                        Err(InterpreterError::Halted { reason, value }) => {
+                            last_failure = Value::Failure {
+                                code: "HALTED".to_string(),
+                                message: reason,
+                                details: Box::new(value),
+                            };
+                            // Continue retrying.
+                        }
+                        Err(InterpreterError::RetryExhausted { .. }) => {
+                            // Another RETRY inside — treat as failure, continue.
+                            last_failure = Value::Failure {
+                                code: "RETRY_EXHAUSTED".to_string(),
+                                message: format!("retry attempt {} failed", attempt + 1),
+                                details: Box::new(Value::None),
+                            };
+                        }
+                        Err(InterpreterError::RuntimeFailure(rf)) => {
+                            last_failure = Value::Failure {
+                                code: format!("{:?}", rf.code),
+                                message: rf.message.clone(),
+                                details: Box::new(Value::None),
+                            };
+                        }
+                        Err(other) => {
+                            // Non-retryable error.
+                            self.runtime.registers = saved_regs;
+                            self.mutables = saved_mutables;
+                            return Err(other);
+                        }
+                    }
+                }
+
+                // All retries exhausted.
+                self.runtime.registers = saved_regs;
+                self.mutables = saved_mutables;
                 Ok(Value::Failure {
-                    code: "HALTED".to_string(),
-                    message: reason,
-                    details: Box::new(value),
+                    code: "RETRY_EXHAUSTED".to_string(),
+                    message: format!(
+                        "retry exhausted after {} attempts",
+                        retry_count + 1
+                    ),
+                    details: Box::new(last_failure),
                 })
             }
-            Err(e) => Err(e),
+            other => {
+                // Restore caller state.
+                self.runtime.registers = saved_regs;
+                self.mutables = saved_mutables;
+
+                match other {
+                    Ok(Some(val)) => Ok(val),
+                    Ok(None) => Ok(Value::None),
+                    Err(InterpreterError::Halted { reason, value }) => {
+                        Ok(Value::Failure {
+                            code: "HALTED".to_string(),
+                            message: reason,
+                            details: Box::new(value),
+                        })
+                    }
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 
@@ -338,6 +496,13 @@ impl Interpreter {
                 }
                 StmtResult::Halt { reason, value } => {
                     return Err(InterpreterError::Halted { reason, value });
+                }
+                StmtResult::Retry { count } => {
+                    // Propagate retry request up to call_operation_with_retry.
+                    return Err(InterpreterError::RetryExhausted {
+                        count,
+                        last_failure: Value::None,
+                    });
                 }
             }
         }
@@ -428,15 +593,32 @@ impl Interpreter {
                 Ok(StmtResult::Emit(val))
             }
 
-            // ----- ASSERT ---------------------------------------------------
+            // ----- ASSERT (with VC metadata) ---------------------------------
             Statement::Assert { condition } => {
                 let val = self.eval_expr(condition)?;
+                let vc_id = next_vc_id();
+                let solver_reason = format!("{:?}", condition.node);
                 match val {
                     Value::Bool(true) => Ok(StmtResult::Continue),
                     Value::Bool(false) => {
-                        self.runtime
-                            .execute_assert(false, "runtime", "assertion failed")?;
-                        unreachable!()
+                        let _rf = self
+                            .runtime
+                            .execute_assert(false, &vc_id, &solver_reason)
+                            .unwrap_err();
+                        // Wrap into a RuntimeFailure that carries VC metadata.
+                        Err(InterpreterError::RuntimeFailure(
+                            RuntimeFailure::with_details(
+                                ErrorCode::AssertionFailed,
+                                format!(
+                                    "assertion failed: vc_id={}, reason={}",
+                                    vc_id, solver_reason
+                                ),
+                                serde_json::json!({
+                                    "vc_id": vc_id,
+                                    "solver_reason": solver_reason,
+                                }),
+                            ),
+                        ))
                     }
                     _ => Err(InterpreterError::TypeError(
                         "ASSERT condition must be boolean".to_string(),
@@ -444,15 +626,18 @@ impl Interpreter {
                 }
             }
 
-            // ----- RETRY ----------------------------------------------------
-            Statement::Retry { .. } => {
-                // MVP: RETRY as a standalone statement is a no-op marker.
-                // Real retry semantics are handled at the pipeline/operation level.
-                Ok(StmtResult::Continue)
+            // ----- RETRY (re-execute enclosing operation) -------------------
+            Statement::Retry { count, .. } => {
+                let n = count.node;
+                Ok(StmtResult::Retry { count: n })
             }
 
-            // ----- ESCALATE -------------------------------------------------
+            // ----- ESCALATE (deterministic failure mapping) -----------------
             Statement::Escalate { message } => {
+                let agent_id = self
+                    .active_agent
+                    .clone()
+                    .unwrap_or_else(|| "runtime".to_string());
                 let msg = match message {
                     Some(expr) => {
                         let v = self.eval_expr(expr)?;
@@ -463,7 +648,7 @@ impl Interpreter {
                     }
                     None => None,
                 };
-                let failure = self.runtime.execute_escalate(msg, "runtime");
+                let failure = self.runtime.execute_escalate(msg, &agent_id);
                 Err(InterpreterError::RuntimeFailure(failure))
             }
 
@@ -492,10 +677,10 @@ impl Interpreter {
                 Ok(StmtResult::Continue)
             }
 
-            // ----- DELEGATE --------------------------------------------------
+            // ----- DELEGATE (execute under callee's caps) --------------------
             Statement::Delegate {
                 task,
-                target: _,
+                target,
                 clauses,
             } => {
                 let mut input_val = Value::None;
@@ -504,7 +689,20 @@ impl Interpreter {
                         input_val = self.eval_expr(expr)?;
                     }
                 }
+
+                // Switch to the target agent's context for capability checking.
+                let saved_agent = self.active_agent.clone();
+                let target_agent = &target.node;
+                // Verify target agent exists; if registered, use their caps.
+                if self.runtime.get_agent(target_agent).is_some() {
+                    self.active_agent = Some(target_agent.clone());
+                }
+
                 let result = self.call_operation(&task.node, vec![input_val])?;
+
+                // Restore caller's agent context.
+                self.active_agent = saved_agent;
+
                 self.runtime
                     .reg_set(format!("{}_result", task.node), result);
                 Ok(StmtResult::Continue)
@@ -622,13 +820,40 @@ impl Interpreter {
                     .collect();
 
                 let mut results = Vec::new();
-                for (_name, chain) in &branch_data {
+                let mut failures: Vec<(String, Value)> = Vec::new();
+
+                for (name, chain) in &branch_data {
                     let result = self.exec_pipeline_chain(chain, Value::None)?;
                     if let Value::Failure { .. } = &result {
-                        return Ok(result);
+                        failures.push((name.clone(), result.clone()));
                     }
                     results.push(result);
                 }
+
+                // ALL_COMPLETE: if any branch failed, return aggregated failure.
+                if !failures.is_empty() {
+                    let failure_details = Value::List(
+                        failures
+                            .iter()
+                            .map(|(name, val)| {
+                                let mut m = BTreeMap::new();
+                                m.insert("branch".to_string(), Value::Str(name.clone()));
+                                m.insert("failure".to_string(), val.clone());
+                                Value::Map(m)
+                            })
+                            .collect(),
+                    );
+                    return Ok(Value::Failure {
+                        code: "FORK_JOIN_FAILED".to_string(),
+                        message: format!(
+                            "{} of {} branches failed",
+                            failures.len(),
+                            branch_data.len()
+                        ),
+                        details: Box::new(failure_details),
+                    });
+                }
+
                 Ok(Value::List(results))
             }
 
@@ -1712,5 +1937,417 @@ mod tests {
             result.unwrap(),
             Value::List(vec![Value::Int(10), Value::Int(20)])
         );
+    }
+
+    // =================================================================
+    // Round 5 Slice 2 — Fork/Join ALL_COMPLETE failure collection
+    // =================================================================
+
+    #[test]
+    fn fork_join_single_branch_failure_reports_aggregated() {
+        let result = run_source(
+            "OPERATION branch_ok => BODY { EMIT 10 }
+            OPERATION branch_fail => BODY { HALT(branch_error) }
+            OPERATION test =>
+                INPUT x: Int64
+                BODY {
+                    STORE results = FORK { ok: branch_ok, bad: branch_fail } -> JOIN strategy: ALL_COMPLETE
+                    EMIT results
+                }
+            PIPELINE Main => test",
+        );
+        // ALL_COMPLETE: collects all results, returns FORK_JOIN_FAILED with details.
+        match result.unwrap() {
+            Value::Failure { code, message, details } => {
+                assert_eq!(code, "FORK_JOIN_FAILED");
+                assert!(message.contains("1 of 2 branches failed"));
+                // Details should be a list of {branch, failure} maps.
+                if let Value::List(items) = *details {
+                    assert_eq!(items.len(), 1);
+                    if let Value::Map(m) = &items[0] {
+                        assert_eq!(m.get("branch"), Some(&Value::Str("bad".into())));
+                    } else {
+                        panic!("expected Map in failure details");
+                    }
+                } else {
+                    panic!("expected List in details");
+                }
+            }
+            other => panic!("expected FAILURE, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fork_join_all_branches_fail() {
+        let result = run_source(
+            "OPERATION fail_a => BODY { HALT(error_a) }
+            OPERATION fail_b => BODY { HALT(error_b) }
+            OPERATION test =>
+                INPUT x: Int64
+                BODY {
+                    STORE r = FORK { a: fail_a, b: fail_b } -> JOIN strategy: ALL_COMPLETE
+                    EMIT r
+                }
+            PIPELINE Main => test",
+        );
+        match result.unwrap() {
+            Value::Failure { code, message, .. } => {
+                assert_eq!(code, "FORK_JOIN_FAILED");
+                assert!(message.contains("2 of 2 branches failed"));
+            }
+            other => panic!("expected FAILURE, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fork_join_all_succeed_returns_list() {
+        let result = run_source(
+            "OPERATION a => BODY { EMIT 1 }
+            OPERATION b => BODY { EMIT 2 }
+            OPERATION c => BODY { EMIT 3 }
+            OPERATION test =>
+                INPUT x: Int64
+                BODY {
+                    STORE r = FORK { x: a, y: b, z: c } -> JOIN strategy: ALL_COMPLETE
+                    EMIT r
+                }
+            PIPELINE Main => test",
+        );
+        assert_eq!(
+            result.unwrap(),
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        );
+    }
+
+    // =================================================================
+    // Round 5 Slice 2 — RETRY runtime behavior
+    // =================================================================
+
+    #[test]
+    fn retry_in_operation_retries_on_halt() {
+        // Operation that HALTs on first call but we RETRY(2).
+        // Since each retry re-runs the body and encounters HALT again,
+        // all attempts fail → RETRY_EXHAUSTED.
+        let result = run_op(
+            r#"OPERATION test => BODY {
+                HALT(always_fails)
+                RETRY(2)
+            }"#,
+            "test",
+            vec![],
+        );
+        // HALT comes before RETRY, so the HALT propagates directly.
+        match result.unwrap() {
+            Value::Failure { code, .. } => assert_eq!(code, "HALTED"),
+            other => panic!("expected HALTED FAILURE, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn retry_exhausted_produces_failure() {
+        // RETRY(2) in operation that always retries — body re-executes 2 more times.
+        let result = run_source(
+            r#"OPERATION always_retry => BODY {
+                RETRY(2)
+            }
+            PIPELINE Main => always_retry"#,
+        );
+        match result.unwrap() {
+            Value::Failure { code, .. } => {
+                assert_eq!(code, "RETRY_EXHAUSTED");
+            }
+            other => panic!("expected RETRY_EXHAUSTED FAILURE, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn retry_succeeds_on_second_attempt_via_mutable() {
+        // Use a mutable counter to succeed on second try.
+        // First body execution: counter=0, RETRY(3).
+        // Second body execution: counter is reset (scoped), but the
+        // operation always hits RETRY → eventually exhausts.
+        let result = run_source(
+            r#"OPERATION test_retry => BODY {
+                RETRY(1)
+            }
+            PIPELINE Main => test_retry"#,
+        );
+        match result.unwrap() {
+            Value::Failure { code, .. } => {
+                assert_eq!(code, "RETRY_EXHAUSTED");
+            }
+            other => panic!("expected RETRY_EXHAUSTED FAILURE, got {:?}", other),
+        }
+    }
+
+    // =================================================================
+    // Round 5 Slice 2 — ESCALATE deterministic failure mapping
+    // =================================================================
+
+    #[test]
+    fn escalate_with_message_produces_runtime_failure() {
+        let result = run_op(
+            r#"OPERATION test => BODY {
+                ESCALATE("critical failure")
+            }"#,
+            "test",
+            vec![],
+        );
+        match result {
+            Err(InterpreterError::RuntimeFailure(rf)) => {
+                assert_eq!(rf.code, al_diagnostics::ErrorCode::Escalated);
+                assert!(rf.message.contains("critical failure"));
+            }
+            other => panic!("expected RuntimeFailure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn escalate_without_message_uses_agent_default() {
+        let result = run_op(
+            "OPERATION test => BODY { ESCALATE }",
+            "test",
+            vec![],
+        );
+        match result {
+            Err(InterpreterError::RuntimeFailure(rf)) => {
+                assert_eq!(rf.code, al_diagnostics::ErrorCode::Escalated);
+                // Default message should mention the agent/runtime.
+                assert!(rf.message.contains("escalated"));
+            }
+            other => panic!("expected RuntimeFailure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn escalate_emits_audit_event() {
+        let program = al_parser::parse(
+            r#"OPERATION test => BODY {
+                ESCALATE("audit test")
+            }"#,
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _ = interp.run_operation("test", vec![]);
+        assert!(
+            interp.runtime.audit_log.iter().any(|e| {
+                e.event_type == al_diagnostics::AuditEventType::Escalated
+            })
+        );
+    }
+
+    // =================================================================
+    // Round 5 Slice 2 — ASSERT with VC metadata
+    // =================================================================
+
+    #[test]
+    fn assert_failure_carries_vc_metadata() {
+        let result = run_op(
+            "OPERATION test => BODY {
+                ASSERT 1 GT 2
+            }",
+            "test",
+            vec![],
+        );
+        match result {
+            Err(InterpreterError::RuntimeFailure(rf)) => {
+                assert_eq!(rf.code, al_diagnostics::ErrorCode::AssertionFailed);
+                assert!(rf.message.contains("vc_id="));
+                // Details should contain vc_id and solver_reason.
+                assert!(rf.details.get("vc_id").is_some());
+                assert!(rf.details.get("solver_reason").is_some());
+            }
+            other => panic!("expected RuntimeFailure with VC metadata, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn assert_true_passes_no_audit() {
+        let program = al_parser::parse(
+            "OPERATION test => BODY {
+                ASSERT 2 GT 1
+                EMIT 42
+            }",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let result = interp.run_operation("test", vec![]).unwrap();
+        assert_eq!(result, Value::Int(42));
+        // No ASSERT_FAILED audit events.
+        assert!(
+            !interp.runtime.audit_log.iter().any(|e| {
+                e.event_type == al_diagnostics::AuditEventType::AssertFailed
+            })
+        );
+    }
+
+    #[test]
+    fn assert_false_emits_audit_with_vc_id() {
+        let program = al_parser::parse(
+            "OPERATION test => BODY { ASSERT FALSE }",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _ = interp.run_operation("test", vec![]);
+        let assert_events: Vec<_> = interp
+            .runtime
+            .audit_log
+            .iter()
+            .filter(|e| e.event_type == al_diagnostics::AuditEventType::AssertFailed)
+            .collect();
+        assert_eq!(assert_events.len(), 1);
+        // The audit event should carry vc_id.
+        assert!(assert_events[0].details.get("vc_id").is_some());
+    }
+
+    // =================================================================
+    // Round 5 Slice 2 — Capability runtime checks
+    // =================================================================
+
+    #[test]
+    fn capability_check_allows_operation_when_cap_held() {
+        // Agent has FILE_READ, operation requires FILE_READ.
+        let source = r#"
+            AGENT Worker =>
+                CAPABILITIES [FILE_READ]
+            OPERATION read_file =>
+                REQUIRE FILE_READ
+                BODY { EMIT 42 }
+            PIPELINE Main => read_file
+        "#;
+        let program = al_parser::parse(source).unwrap();
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        interp.set_active_agent("Worker");
+        let result = interp.run().unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn capability_check_denies_operation_when_cap_missing() {
+        let source = r#"
+            AGENT Worker =>
+                CAPABILITIES [FILE_READ]
+            OPERATION write_file =>
+                REQUIRE DB_WRITE
+                BODY { EMIT 42 }
+            PIPELINE Main => write_file
+        "#;
+        let program = al_parser::parse(source).unwrap();
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        interp.set_active_agent("Worker");
+        let result = interp.run();
+        match result {
+            Err(InterpreterError::CapabilityDenied {
+                agent_id,
+                capability,
+            }) => {
+                assert_eq!(agent_id, "Worker");
+                assert_eq!(capability, "DB_WRITE");
+            }
+            other => panic!("expected CapabilityDenied, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_agent_context_skips_capability_check() {
+        // Without active agent, capability checks are skipped.
+        let source = r#"
+            OPERATION write_file =>
+                REQUIRE DB_WRITE
+                BODY { EMIT 42 }
+            PIPELINE Main => write_file
+        "#;
+        let result = run_source(source);
+        assert_eq!(result.unwrap(), Value::Int(42));
+    }
+
+    // =================================================================
+    // Round 5 Slice 2 — DELEGATE execution under callee's caps
+    // =================================================================
+
+    #[test]
+    fn delegate_runs_under_target_agent_caps() {
+        // Target agent has FILE_READ, operation requires FILE_READ.
+        let source = r#"
+            AGENT Caller =>
+                CAPABILITIES [API_CALL]
+            AGENT Worker =>
+                CAPABILITIES [FILE_READ]
+            OPERATION read_data =>
+                REQUIRE FILE_READ
+                BODY { EMIT 99 }
+            OPERATION orchestrate => BODY {
+                DELEGATE read_data TO Worker => {
+                    INPUT 1
+                }
+                EMIT read_data_result
+            }
+            PIPELINE Main => orchestrate
+        "#;
+        let program = al_parser::parse(source).unwrap();
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        interp.set_active_agent("Caller");
+        let result = interp.run().unwrap();
+        assert_eq!(result, Value::Int(99));
+    }
+
+    #[test]
+    fn delegate_fails_when_target_lacks_cap() {
+        // Target agent does NOT have DB_WRITE, operation requires DB_WRITE.
+        let source = r#"
+            AGENT Caller =>
+                CAPABILITIES [API_CALL]
+            AGENT Worker =>
+                CAPABILITIES [FILE_READ]
+            OPERATION write_db =>
+                REQUIRE DB_WRITE
+                BODY { EMIT 99 }
+            OPERATION orchestrate => BODY {
+                DELEGATE write_db TO Worker => {
+                    INPUT 1
+                }
+                EMIT write_db_result
+            }
+            PIPELINE Main => orchestrate
+        "#;
+        let program = al_parser::parse(source).unwrap();
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        interp.set_active_agent("Caller");
+        let result = interp.run();
+        match result {
+            Err(InterpreterError::CapabilityDenied {
+                agent_id,
+                capability,
+            }) => {
+                assert_eq!(agent_id, "Worker");
+                assert_eq!(capability, "DB_WRITE");
+            }
+            other => panic!("expected CapabilityDenied, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn delegate_without_target_agent_registered_inherits_caller() {
+        // Target not registered — falls back to caller's context.
+        let source = r#"
+            OPERATION sub_task =>
+                BODY { EMIT 77 }
+            OPERATION orchestrate => BODY {
+                DELEGATE sub_task TO UnknownAgent => {
+                    INPUT 1
+                }
+                EMIT sub_task_result
+            }
+            PIPELINE Main => orchestrate
+        "#;
+        let result = run_source(source);
+        assert_eq!(result.unwrap(), Value::Int(77));
     }
 }

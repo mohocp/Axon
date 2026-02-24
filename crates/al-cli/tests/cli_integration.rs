@@ -178,3 +178,131 @@ PIPELINE Main => test
     assert_eq!(code, 0);
     assert!(stdout.contains("Result: 30"), "expected 30: {}", stdout);
 }
+
+// =========================================================================
+// Round 5 Slice 2 — CLI integration tests
+// =========================================================================
+
+#[test]
+fn cli_run_fork_join_all_succeed() {
+    let source = r#"
+OPERATION a => BODY { EMIT 10 }
+OPERATION b => BODY { EMIT 20 }
+OPERATION test =>
+  INPUT x: Int64
+  BODY {
+    STORE r = FORK { x: a, y: b } -> JOIN strategy: ALL_COMPLETE
+    EMIT r
+  }
+PIPELINE Main => test
+"#;
+    let (stdout, _stderr, code) = run_cli_source(source);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Result: [10, 20]"),
+        "expected [10, 20] in output: {}",
+        stdout
+    );
+}
+
+#[test]
+fn cli_run_fork_join_failure_collected() {
+    let source = r#"
+OPERATION ok_branch => BODY { EMIT 42 }
+OPERATION bad_branch => BODY { HALT(branch_err) }
+OPERATION test =>
+  INPUT x: Int64
+  BODY {
+    STORE r = FORK { ok: ok_branch, bad: bad_branch } -> JOIN strategy: ALL_COMPLETE
+    EMIT r
+  }
+PIPELINE Main => test
+"#;
+    let (stdout, _stderr, code) = run_cli_source(source);
+    assert_eq!(code, 0, "fork/join failure produces FAILURE value, not crash");
+    assert!(
+        stdout.contains("FORK_JOIN_FAILED"),
+        "expected FORK_JOIN_FAILED in output: {}",
+        stdout
+    );
+}
+
+#[test]
+fn cli_run_retry_exhausted() {
+    let source = r#"
+OPERATION always_retry => BODY {
+  RETRY(2)
+}
+PIPELINE Main => always_retry
+"#;
+    let (stdout, _stderr, code) = run_cli_source(source);
+    assert_eq!(code, 0, "RETRY_EXHAUSTED produces FAILURE value");
+    assert!(
+        stdout.contains("RETRY_EXHAUSTED"),
+        "expected RETRY_EXHAUSTED in output: {}",
+        stdout
+    );
+}
+
+#[test]
+fn cli_run_escalate() {
+    let source = r#"
+OPERATION test => BODY {
+  ESCALATE("critical")
+}
+PIPELINE Main => test
+"#;
+    let (_stdout, _stderr, code) = run_cli_source(source);
+    // ESCALATE produces a runtime failure which causes non-zero exit.
+    assert_ne!(code, 0, "ESCALATE should fail execution");
+}
+
+#[test]
+fn cli_run_assert_pass() {
+    let source = r#"
+OPERATION test => BODY {
+  ASSERT 5 GT 3
+  EMIT 42
+}
+PIPELINE Main => test
+"#;
+    let (stdout, _stderr, code) = run_cli_source(source);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Result: 42"), "expected 42: {}", stdout);
+}
+
+#[test]
+fn cli_run_assert_fail() {
+    let source = r#"
+OPERATION test => BODY {
+  ASSERT 1 GT 2
+  EMIT 42
+}
+PIPELINE Main => test
+"#;
+    let (_stdout, _stderr, code) = run_cli_source(source);
+    assert_ne!(code, 0, "ASSERT failure should exit non-zero");
+}
+
+#[test]
+fn cli_run_delegate_basic() {
+    let source = r#"
+AGENT Orchestrator =>
+  CAPABILITIES [delegate]
+AGENT Worker =>
+  CAPABILITIES [FILE_READ]
+OPERATION sub_task =>
+  INPUT x: Int64
+  BODY { EMIT x + 10 }
+OPERATION main_op => BODY {
+  DELEGATE sub_task TO Worker => {
+    INPUT 5
+  }
+  EMIT sub_task_result
+}
+PIPELINE Main => main_op
+"#;
+    let (stdout, _stderr, code) = run_cli_source(source);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Result: 15"), "expected 15: {}", stdout);
+}

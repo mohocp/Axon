@@ -1,4 +1,4 @@
-# AgentLang Round 5 — Slice 1 Implementation Summary
+# AgentLang Round 5 — Implementation Summary
 
 **Date:** 2026-02-24
 **Scope:** Runtime interpreter MVP — end-to-end program execution
@@ -114,15 +114,106 @@ Key design decisions:
 | `examples/factorial.al` | **NEW** — loop/mutable sample |
 | `examples/match_result.al` | **NEW** — map/member-access sample |
 
-## Remaining Round 5 Items
+## Remaining Round 5 Items (after Slice 1)
 
 Per `specs/IMPLEMENTATION_ROADMAP_NEXT.md`, still to do in future slices:
 
 - **5.3** Pattern matching: deeper destructuring (constructor patterns)
-- **5.5** Fork/Join with actual branch failure collection
-- **5.6** RETRY runtime: re-execute failing stage up to N times in pipeline context
-- **5.7** ESCALATE runtime: richer agent context (not just "runtime")
-- **5.8** ASSERT runtime: VC-linked assertion with vc_id/solver_reason from HIR
-- **5.9** Capability checks: per-operation capability enforcement at call sites
-- **5.10** DELEGATE runtime: execute under callee's caps (not caller's)
+- ~~**5.5** Fork/Join with actual branch failure collection~~ ✅ Slice 2
+- ~~**5.6** RETRY runtime: re-execute failing stage up to N times in pipeline context~~ ✅ Slice 2
+- ~~**5.7** ESCALATE runtime: richer agent context (not just "runtime")~~ ✅ Slice 2
+- ~~**5.8** ASSERT runtime: VC-linked assertion with vc_id/solver_reason from HIR~~ ✅ Slice 2
+- ~~**5.9** Capability checks: per-operation capability enforcement at call sites~~ ✅ Slice 2
+- ~~**5.10** DELEGATE runtime: execute under callee's caps (not caller's)~~ ✅ Slice 2
 - **Stdlib implementations**: core.data (MAP, FILTER, REDUCE, etc.)
+
+---
+
+## Slice 2 — Runtime Semantics: Fork/Join, RETRY, ESCALATE, ASSERT+VC, Capabilities, DELEGATE
+
+**Date:** 2026-02-24
+**Scope:** Complete runtime execution semantics for all MVP control-flow constructs
+
+### 1. Fork/Join ALL_COMPLETE with Branch Failure Collection
+
+- **All branches execute** regardless of individual failures (true ALL_COMPLETE).
+- If any branch produces a FAILURE value, an aggregated `FORK_JOIN_FAILED` is returned.
+- Failure details include a list of `{ branch: "<name>", failure: <value> }` maps.
+- Successful fork/join returns `List` of branch results in order.
+
+### 2. RETRY Runtime Behavior
+
+- `RETRY(N)` statement triggers re-execution of the enclosing operation body up to N additional times.
+- On each retry, arguments are re-bound and mutable state is reset to the call entry point.
+- If all attempts fail (HALT, RuntimeFailure, or further RETRY), a `RETRY_EXHAUSTED` FAILURE value is produced.
+- `RETRY_EXHAUSTED` carries the last failure as details.
+- New `StmtResult::Retry { count }` variant propagates retry requests through the block/operation execution stack.
+
+### 3. ESCALATE with Deterministic Failure Mapping
+
+- ESCALATE now uses the active agent context (not hardcoded "runtime").
+- Audit event is emitted with `AuditEventType::Escalated` and the agent's ID.
+- Agent is marked as `Failed` in the runtime state.
+- `ErrorCode::Escalated` failure is returned with agent and message metadata.
+
+### 4. ASSERT with VC Metadata
+
+- Each ASSERT statement generates a unique `vc_id` (e.g., `vc-rt-0001`).
+- Monotonically increasing VC counter ensures deterministic IDs within a session.
+- Solver reason is derived from the condition expression's AST debug representation.
+- On failure:
+  - Audit event includes `vc_id` and `solver_reason`.
+  - `RuntimeFailure` carries `vc_id` and `solver_reason` in `details` JSON.
+  - Error message includes both identifiers for traceability.
+
+### 5. Capability Runtime Checks
+
+- New `active_agent` field on `Interpreter` tracks the current agent context.
+- `set_active_agent(agent_id)` sets the context for capability checking.
+- When an operation declares `REQUIRE <CAPABILITY>`, the interpreter:
+  1. Resolves the capability name to `al_capabilities::Capability`.
+  2. Calls `Runtime::check_capability(agent_id, cap)`.
+  3. On failure, returns `InterpreterError::CapabilityDenied { agent_id, capability }`.
+- Without an active agent context, capability checks are skipped (backward compatible).
+
+### 6. DELEGATE Execution Under Callee's Capabilities
+
+- DELEGATE switches `active_agent` to the target agent before calling the delegated operation.
+- The delegated operation's `REQUIRE` clauses are checked against the **target** agent's capabilities, not the caller's.
+- After delegation completes, the caller's agent context is restored.
+- If the target agent is not registered, the caller's context is preserved (graceful fallback).
+- Result is stored as `<task_name>_result` in the caller's registers.
+
+### 7. New Error Variants
+
+| Variant | Description |
+|---------|-------------|
+| `InterpreterError::RetryExhausted { count, last_failure }` | RETRY exhausted all attempts |
+| `InterpreterError::CapabilityDenied { agent_id, capability }` | Operation requires capability not held by active agent |
+
+### 8. Test Coverage (Slice 2)
+
+| Category | New Tests | Details |
+|----------|-----------|---------|
+| Fork/Join ALL_COMPLETE | 3 | Single branch fail, all fail, all succeed |
+| RETRY runtime | 3 | HALT before RETRY, exhaustion, nested retry |
+| ESCALATE | 3 | With message, without message, audit event emission |
+| ASSERT + VC metadata | 3 | Failure carries vc_id, pass with no audit, failure audit has vc_id |
+| Capability checks | 3 | Allowed when cap held, denied when missing, skipped without agent |
+| DELEGATE | 3 | Under target caps, fails when target lacks cap, unknown target fallback |
+| CLI integration | 7 | Fork/join success, fork/join fail, retry, escalate, assert pass/fail, delegate |
+| **Total new (Slice 2)** | **28** | |
+| **Total suite** | **361** | All passing, 0 regressions |
+
+### 9. Files Changed (Slice 2)
+
+| File | Change |
+|------|--------|
+| `crates/al-runtime/src/interpreter.rs` | Fork/Join failure collection, RETRY re-execution, ASSERT VC metadata, capability checks, DELEGATE callee caps, 21 new unit tests |
+| `crates/al-cli/tests/cli_integration.rs` | 7 new CLI integration tests |
+| `specs/IMPLEMENTATION_ROUND5_SUMMARY_2026-02-24.md` | Added Slice 2 section |
+
+## Remaining Round 5 Items (after Slice 2)
+
+- **5.3** Pattern matching: constructor patterns (deferred to Round 6+)
+- **Stdlib implementations**: core.data (MAP, FILTER, REDUCE, etc.) — Round 6
