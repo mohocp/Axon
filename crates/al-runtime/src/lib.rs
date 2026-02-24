@@ -626,6 +626,24 @@ impl Runtime {
         self.audit_log.push(event);
     }
 
+    /// Public interface for emitting audit events (used by the interpreter).
+    pub fn emit_audit_event(
+        &mut self,
+        agent_id: &str,
+        event_type: AuditEventType,
+        details: serde_json::Value,
+    ) {
+        self.emit_audit(agent_id, event_type, details);
+    }
+
+    /// Serialize the entire audit log as JSONL (one JSON line per event).
+    pub fn audit_to_jsonl(&self) -> Vec<String> {
+        self.audit_log
+            .iter()
+            .filter_map(|e| e.to_jsonl().ok())
+            .collect()
+    }
+
     // =======================================================================
     // 1. execute_retry
     // =======================================================================

@@ -119,6 +119,8 @@ dependencies = [
  "al-ast",
  "al-diagnostics",
  "al-runtime",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

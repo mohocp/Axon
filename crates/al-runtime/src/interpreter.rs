@@ -18,9 +18,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use al_ast::*;
-use al_diagnostics::{ErrorCode, RuntimeFailure};
+use al_diagnostics::{AuditEventType, ErrorCode, RuntimeFailure};
 
 use crate::{Runtime, Value};
+
+/// Names of built-in stdlib data operations.
+const STDLIB_BUILTINS: &[&str] = &["FILTER", "MAP", "REDUCE"];
 
 // =========================================================================
 // Error type
@@ -268,6 +271,17 @@ impl Interpreter {
         chain: &Spanned<PipelineChain>,
         initial: Value,
     ) -> Result<Value, InterpreterError> {
+        // Emit PIPELINE_STARTED audit event.
+        let agent_id = self
+            .active_agent
+            .clone()
+            .unwrap_or_else(|| "runtime".to_string());
+        self.runtime.emit_audit_event(
+            &agent_id,
+            AuditEventType::PipelineStarted,
+            serde_json::json!({ "stages": chain.node.stages.len() }),
+        );
+
         let mut current = initial;
         for (i, stage) in chain.node.stages.iter().enumerate() {
             if i == 0 {
@@ -328,6 +342,11 @@ impl Interpreter {
         name: &str,
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
+        // Check for built-in stdlib operations first.
+        if STDLIB_BUILTINS.contains(&name) {
+            return self.call_stdlib_builtin(name, args);
+        }
+
         let op = match self.operations.get(name) {
             Some(op) => op.clone(),
             None => {
@@ -338,6 +357,17 @@ impl Interpreter {
                 });
             }
         };
+
+        // Emit OPERATION_CALLED audit event.
+        let agent_id = self
+            .active_agent
+            .clone()
+            .unwrap_or_else(|| "runtime".to_string());
+        self.runtime.emit_audit_event(
+            &agent_id,
+            AuditEventType::OperationCalled,
+            serde_json::json!({ "operation": name }),
+        );
 
         // Capability check: if an agent context is active, verify required caps.
         if let Some(ref agent_id) = self.active_agent {
@@ -477,6 +507,121 @@ impl Interpreter {
                 }
             }
         }
+    }
+
+    // =====================================================================
+    // Built-in stdlib data operations
+    // =====================================================================
+
+    /// Dispatch a built-in stdlib operation (FILTER, MAP, REDUCE).
+    fn call_stdlib_builtin(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let agent_id = self
+            .active_agent
+            .clone()
+            .unwrap_or_else(|| "runtime".to_string());
+        self.runtime.emit_audit_event(
+            &agent_id,
+            AuditEventType::StdlibCall,
+            serde_json::json!({ "operation": name }),
+        );
+
+        match name {
+            "FILTER" => self.stdlib_filter(args),
+            "MAP" => self.stdlib_map(args),
+            "REDUCE" => self.stdlib_reduce(args),
+            _ => Ok(Value::Failure {
+                code: "NOT_IMPLEMENTED".to_string(),
+                message: format!("stdlib operation '{}' is not implemented", name),
+                details: Box::new(Value::None),
+            }),
+        }
+    }
+
+    /// FILTER(list, predicate_op_name) -> List
+    ///
+    /// Calls the named predicate operation for each element.
+    /// Keeps elements where the predicate returns Bool(true).
+    fn stdlib_filter(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (list, pred_name) = match args.as_slice() {
+            [Value::List(items), Value::Str(pred)] => (items.clone(), pred.clone()),
+            [_, Value::Str(_)] => {
+                return Err(InterpreterError::TypeError(
+                    "FILTER: first argument must be a List".to_string(),
+                ));
+            }
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "FILTER requires (List, String) arguments".to_string(),
+                ));
+            }
+        };
+
+        let mut result = Vec::new();
+        for item in &list {
+            let pred_result = self.call_operation(&pred_name, vec![item.clone()])?;
+            if pred_result == Value::Bool(true) {
+                result.push(item.clone());
+            }
+        }
+        Ok(Value::List(result))
+    }
+
+    /// MAP(list, transform_op_name) -> List
+    ///
+    /// Calls the named operation for each element and collects the results.
+    fn stdlib_map(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (list, op_name) = match args.as_slice() {
+            [Value::List(items), Value::Str(op)] => (items.clone(), op.clone()),
+            [_, Value::Str(_)] => {
+                return Err(InterpreterError::TypeError(
+                    "MAP: first argument must be a List".to_string(),
+                ));
+            }
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "MAP requires (List, String) arguments".to_string(),
+                ));
+            }
+        };
+
+        let mut result = Vec::new();
+        for item in &list {
+            let mapped = self.call_operation(&op_name, vec![item.clone()])?;
+            result.push(mapped);
+        }
+        Ok(Value::List(result))
+    }
+
+    /// REDUCE(list, initial, reducer_op_name) -> Value
+    ///
+    /// Starting from `initial`, calls the named operation with (accumulator, element)
+    /// for each element, threading the result forward.
+    fn stdlib_reduce(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (list, initial, op_name) = match args.as_slice() {
+            [Value::List(items), init, Value::Str(op)] => {
+                (items.clone(), init.clone(), op.clone())
+            }
+            [_, _, Value::Str(_)] => {
+                return Err(InterpreterError::TypeError(
+                    "REDUCE: first argument must be a List".to_string(),
+                ));
+            }
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "REDUCE requires (List, initial, String) arguments".to_string(),
+                ));
+            }
+        };
+
+        let mut acc = initial;
+        for item in &list {
+            acc = self.call_operation(&op_name, vec![acc, item.clone()])?;
+        }
+        Ok(acc)
     }
 
     // =====================================================================
@@ -2349,5 +2494,389 @@ mod tests {
         "#;
         let result = run_source(source);
         assert_eq!(result.unwrap(), Value::Int(77));
+    }
+
+    // =================================================================
+    // Round 6: Stdlib FILTER / MAP / REDUCE tests
+    // =================================================================
+
+    #[test]
+    fn stdlib_filter_keeps_matching_elements() {
+        let source = r#"
+            OPERATION is_positive =>
+                INPUT x: Int64
+                BODY {
+                    EMIT x GT 0
+                }
+            OPERATION test => BODY {
+                STORE data = [1, -2, 3, -4, 5]
+                STORE result = FILTER(data, "is_positive")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(1), Value::Int(3), Value::Int(5)])
+        );
+    }
+
+    #[test]
+    fn stdlib_filter_empty_list() {
+        let source = r#"
+            OPERATION always_true =>
+                INPUT x: Int64
+                BODY { EMIT TRUE }
+            OPERATION test => BODY {
+                STORE data = []
+                STORE result = FILTER(data, "always_true")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    #[test]
+    fn stdlib_filter_no_matches() {
+        let source = r#"
+            OPERATION always_false =>
+                INPUT x: Int64
+                BODY { EMIT FALSE }
+            OPERATION test => BODY {
+                STORE data = [1, 2, 3]
+                STORE result = FILTER(data, "always_false")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    #[test]
+    fn stdlib_map_transforms_elements() {
+        let source = r#"
+            OPERATION double =>
+                INPUT x: Int64
+                BODY { EMIT x * 2 }
+            OPERATION test => BODY {
+                STORE data = [1, 2, 3]
+                STORE result = MAP(data, "double")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(2), Value::Int(4), Value::Int(6)])
+        );
+    }
+
+    #[test]
+    fn stdlib_map_empty_list() {
+        let source = r#"
+            OPERATION double =>
+                INPUT x: Int64
+                BODY { EMIT x * 2 }
+            OPERATION test => BODY {
+                STORE data = []
+                STORE result = MAP(data, "double")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    #[test]
+    fn stdlib_reduce_sums_list() {
+        let source = r#"
+            OPERATION add =>
+                INPUT a: Int64
+                INPUT b: Int64
+                BODY { EMIT a + b }
+            OPERATION test => BODY {
+                STORE data = [1, 2, 3, 4, 5]
+                STORE result = REDUCE(data, 0, "add")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(result, Value::Int(15));
+    }
+
+    #[test]
+    fn stdlib_reduce_empty_list_returns_initial() {
+        let source = r#"
+            OPERATION add =>
+                INPUT a: Int64
+                INPUT b: Int64
+                BODY { EMIT a + b }
+            OPERATION test => BODY {
+                STORE data = []
+                STORE result = REDUCE(data, 42, "add")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn stdlib_reduce_product() {
+        let source = r#"
+            OPERATION multiply =>
+                INPUT a: Int64
+                INPUT b: Int64
+                BODY { EMIT a * b }
+            OPERATION test => BODY {
+                STORE data = [2, 3, 4]
+                STORE result = REDUCE(data, 1, "multiply")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(result, Value::Int(24));
+    }
+
+    #[test]
+    fn stdlib_filter_type_error_non_list() {
+        let source = r#"
+            OPERATION pred =>
+                INPUT x: Int64
+                BODY { EMIT TRUE }
+            OPERATION test => BODY {
+                STORE result = FILTER(42, "pred")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stdlib_map_type_error_non_list() {
+        let source = r#"
+            OPERATION double =>
+                INPUT x: Int64
+                BODY { EMIT x * 2 }
+            OPERATION test => BODY {
+                STORE result = MAP(42, "double")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stdlib_reduce_type_error_non_list() {
+        let source = r#"
+            OPERATION add =>
+                INPUT a: Int64
+                INPUT b: Int64
+                BODY { EMIT a + b }
+            OPERATION test => BODY {
+                STORE result = REDUCE(42, 0, "add")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stdlib_filter_map_compose() {
+        // FILTER then MAP: filter positives, then double them.
+        let source = r#"
+            OPERATION is_positive =>
+                INPUT x: Int64
+                BODY { EMIT x GT 0 }
+            OPERATION double =>
+                INPUT x: Int64
+                BODY { EMIT x * 2 }
+            OPERATION test => BODY {
+                STORE data = [1, -2, 3, -4, 5]
+                STORE filtered = FILTER(data, "is_positive")
+                STORE mapped = MAP(filtered, "double")
+                EMIT mapped
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(2), Value::Int(6), Value::Int(10)])
+        );
+    }
+
+    #[test]
+    fn stdlib_map_reduce_compose() {
+        // MAP then REDUCE: double each, then sum.
+        let source = r#"
+            OPERATION double =>
+                INPUT x: Int64
+                BODY { EMIT x * 2 }
+            OPERATION add =>
+                INPUT a: Int64
+                INPUT b: Int64
+                BODY { EMIT a + b }
+            OPERATION test => BODY {
+                STORE data = [1, 2, 3]
+                STORE doubled = MAP(data, "double")
+                STORE total = REDUCE(doubled, 0, "add")
+                EMIT total
+            }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(source).unwrap();
+        // doubled = [2, 4, 6], sum = 12
+        assert_eq!(result, Value::Int(12));
+    }
+
+    // =================================================================
+    // Round 6: Audit JSONL emission tests
+    // =================================================================
+
+    #[test]
+    fn audit_pipeline_started_event() {
+        let source = r#"
+            OPERATION produce => BODY { EMIT 42 }
+            PIPELINE Main => produce
+        "#;
+        let program = al_parser::parse(source).expect("parse ok");
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _result = interp.run().unwrap();
+
+        // Should have PIPELINE_STARTED and OPERATION_CALLED events.
+        let events = &interp.runtime.audit_log;
+        assert!(
+            events.iter().any(|e| e.event_type == AuditEventType::PipelineStarted),
+            "expected PIPELINE_STARTED audit event"
+        );
+    }
+
+    #[test]
+    fn audit_operation_called_event() {
+        let source = r#"
+            OPERATION produce => BODY { EMIT 42 }
+            PIPELINE Main => produce
+        "#;
+        let program = al_parser::parse(source).expect("parse ok");
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _result = interp.run().unwrap();
+
+        let events = &interp.runtime.audit_log;
+        let op_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == AuditEventType::OperationCalled)
+            .collect();
+        assert!(!op_events.is_empty(), "expected OPERATION_CALLED event");
+        assert_eq!(op_events[0].details["operation"], "produce");
+    }
+
+    #[test]
+    fn audit_stdlib_call_event() {
+        let source = r#"
+            OPERATION double =>
+                INPUT x: Int64
+                BODY { EMIT x * 2 }
+            OPERATION test => BODY {
+                STORE data = [1, 2, 3]
+                STORE result = MAP(data, "double")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let program = al_parser::parse(source).expect("parse ok");
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _result = interp.run().unwrap();
+
+        let events = &interp.runtime.audit_log;
+        let stdlib_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == AuditEventType::StdlibCall)
+            .collect();
+        assert!(!stdlib_events.is_empty(), "expected STDLIB_CALL event");
+        assert_eq!(stdlib_events[0].details["operation"], "MAP");
+    }
+
+    #[test]
+    fn audit_jsonl_format_valid() {
+        let source = r#"
+            OPERATION produce => BODY { EMIT 42 }
+            PIPELINE Main => produce
+        "#;
+        let program = al_parser::parse(source).expect("parse ok");
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _result = interp.run().unwrap();
+
+        let jsonl_lines = interp.runtime.audit_to_jsonl();
+        assert!(!jsonl_lines.is_empty(), "should have audit JSONL output");
+
+        for line in &jsonl_lines {
+            // Each line must be valid JSON.
+            let parsed: serde_json::Value =
+                serde_json::from_str(line).expect("each JSONL line must be valid JSON");
+            // Must have required audit schema fields.
+            assert!(parsed["event_id"].is_string(), "missing event_id");
+            assert!(parsed["timestamp"].is_string(), "missing timestamp");
+            assert!(parsed["agent_id"].is_string(), "missing agent_id");
+            assert!(parsed["task_id"].is_string(), "missing task_id");
+            assert!(parsed["event_type"].is_string(), "missing event_type");
+            assert_eq!(parsed["profile"], "mvp-0.1", "wrong profile");
+        }
+    }
+
+    #[test]
+    fn audit_schema_fields_for_all_event_types() {
+        // Run a program that triggers PIPELINE_STARTED, OPERATION_CALLED, STDLIB_CALL.
+        let source = r#"
+            OPERATION double =>
+                INPUT x: Int64
+                BODY { EMIT x * 2 }
+            OPERATION test => BODY {
+                STORE data = [10, 20]
+                STORE result = MAP(data, "double")
+                EMIT result
+            }
+            PIPELINE Main => test
+        "#;
+        let program = al_parser::parse(source).expect("parse ok");
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _result = interp.run().unwrap();
+
+        let events = &interp.runtime.audit_log;
+        let event_types: Vec<_> = events.iter().map(|e| e.event_type).collect();
+
+        // Verify we got the expected event types.
+        assert!(event_types.contains(&AuditEventType::PipelineStarted));
+        assert!(event_types.contains(&AuditEventType::OperationCalled));
+        assert!(event_types.contains(&AuditEventType::StdlibCall));
+
+        // Verify all events have the required schema fields.
+        for event in events {
+            assert!(!event.event_id.is_empty(), "event_id must not be empty");
+            assert!(!event.timestamp.is_empty(), "timestamp must not be empty");
+            assert!(!event.agent_id.is_empty(), "agent_id must not be empty");
+            assert!(!event.task_id.is_empty(), "task_id must not be empty");
+            assert_eq!(event.profile, "mvp-0.1");
+        }
     }
 }

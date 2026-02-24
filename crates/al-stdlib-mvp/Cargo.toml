@@ -7,3 +7,5 @@ edition.workspace = true
 al-diagnostics = { path = "../al-diagnostics" }
 al-ast = { path = "../al-ast" }
 al-runtime = { path = "../al-runtime" }
+serde = { workspace = true }
+serde_json = { workspace = true }

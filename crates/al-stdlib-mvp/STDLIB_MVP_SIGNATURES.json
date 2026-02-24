@@ -1,0 +1,38 @@
+{
+  "version": "mvp-0.1",
+  "generated": "2026-02-24",
+  "description": "Canonical signatures for implemented AgentLang stdlib data operations.",
+  "operations": {
+    "FILTER": {
+      "module": "core.data",
+      "inputs": [
+        { "name": "list", "type": "List[T]" },
+        { "name": "predicate", "type": "String" }
+      ],
+      "output": "List[T]",
+      "fallible": false,
+      "description": "Filters elements by calling predicate operation; keeps those returning true."
+    },
+    "MAP": {
+      "module": "core.data",
+      "inputs": [
+        { "name": "list", "type": "List[T]" },
+        { "name": "transform", "type": "String" }
+      ],
+      "output": "List[U]",
+      "fallible": false,
+      "description": "Transforms each element by calling the named operation."
+    },
+    "REDUCE": {
+      "module": "core.data",
+      "inputs": [
+        { "name": "list", "type": "List[T]" },
+        { "name": "initial", "type": "U" },
+        { "name": "reducer", "type": "String" }
+      ],
+      "output": "U",
+      "fallible": false,
+      "description": "Folds a list by calling reducer(accumulator, element) for each element."
+    }
+  }
+}

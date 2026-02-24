@@ -492,6 +492,12 @@ pub enum AuditEventType {
     CheckpointRestored,
     /// An error or task was escalated.
     Escalated,
+    /// A user-defined operation was called at runtime.
+    OperationCalled,
+    /// A pipeline execution started.
+    PipelineStarted,
+    /// A built-in stdlib operation was invoked.
+    StdlibCall,
 }
 
 impl std::fmt::Display for AuditEventType {
@@ -503,6 +509,9 @@ impl std::fmt::Display for AuditEventType {
             Self::CheckpointCreated => "CHECKPOINT_CREATED",
             Self::CheckpointRestored => "CHECKPOINT_RESTORED",
             Self::Escalated => "ESCALATED",
+            Self::OperationCalled => "OPERATION_CALLED",
+            Self::PipelineStarted => "PIPELINE_STARTED",
+            Self::StdlibCall => "STDLIB_CALL",
         };
         write!(f, "{}", s)
     }
@@ -807,6 +816,9 @@ mod tests {
             (AuditEventType::CheckpointCreated, "CHECKPOINT_CREATED"),
             (AuditEventType::CheckpointRestored, "CHECKPOINT_RESTORED"),
             (AuditEventType::Escalated, "ESCALATED"),
+            (AuditEventType::OperationCalled, "OPERATION_CALLED"),
+            (AuditEventType::PipelineStarted, "PIPELINE_STARTED"),
+            (AuditEventType::StdlibCall, "STDLIB_CALL"),
         ];
 
         for (event_type, expected_str) in types {
