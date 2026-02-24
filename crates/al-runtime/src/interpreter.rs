@@ -22,8 +22,21 @@ use al_diagnostics::{AuditEventType, ErrorCode, RuntimeFailure};
 
 use crate::{Runtime, Value};
 
-/// Names of built-in stdlib data operations.
-const STDLIB_BUILTINS: &[&str] = &["FILTER", "MAP", "REDUCE"];
+/// Names of built-in stdlib operations.
+const STDLIB_BUILTINS: &[&str] = &[
+    // core.data
+    "FILTER", "MAP", "REDUCE", "SORT", "GROUP", "TAKE", "SKIP",
+    // core.io (stub)
+    "READ", "WRITE",
+    // core.text
+    "PARSE", "FORMAT", "REGEX", "TOKENIZE",
+    // core.http (stub)
+    "GET", "POST",
+    // agent.llm (stub)
+    "GENERATE", "CLASSIFY", "EXTRACT",
+    // agent.memory (in-memory)
+    "REMEMBER", "RECALL", "FORGET",
+];
 
 // =========================================================================
 // Error type
@@ -530,9 +543,33 @@ impl Interpreter {
         );
 
         match name {
+            // core.data
             "FILTER" => self.stdlib_filter(args),
             "MAP" => self.stdlib_map(args),
             "REDUCE" => self.stdlib_reduce(args),
+            "SORT" => self.stdlib_sort(args),
+            "GROUP" => self.stdlib_group(args),
+            "TAKE" => self.stdlib_take(args),
+            "SKIP" => self.stdlib_skip(args),
+            // core.io (MVP stubs)
+            "READ" => self.stdlib_read(args),
+            "WRITE" => self.stdlib_write(args),
+            // core.text
+            "PARSE" => self.stdlib_parse(args),
+            "FORMAT" => self.stdlib_format(args),
+            "REGEX" => self.stdlib_regex(args),
+            "TOKENIZE" => self.stdlib_tokenize(args),
+            // core.http (MVP stubs)
+            "GET" => self.stdlib_http_get(args),
+            "POST" => self.stdlib_http_post(args),
+            // agent.llm (MVP stubs)
+            "GENERATE" => self.stdlib_llm_generate(args),
+            "CLASSIFY" => self.stdlib_llm_classify(args),
+            "EXTRACT" => self.stdlib_llm_extract(args),
+            // agent.memory (in-memory)
+            "REMEMBER" => self.stdlib_memory_remember(args),
+            "RECALL" => self.stdlib_memory_recall(args),
+            "FORGET" => self.stdlib_memory_forget(args),
             _ => Ok(Value::Failure {
                 code: "NOT_IMPLEMENTED".to_string(),
                 message: format!("stdlib operation '{}' is not implemented", name),
@@ -622,6 +659,473 @@ impl Interpreter {
             acc = self.call_operation(&op_name, vec![acc, item.clone()])?;
         }
         Ok(acc)
+    }
+
+    // =====================================================================
+    // core.data: SORT, GROUP, TAKE, SKIP
+    // =====================================================================
+
+    /// SORT(list) -> List
+    ///
+    /// Sorts a list of values. Integers and floats sort numerically,
+    /// strings sort lexicographically. Mixed types sort by type tag.
+    fn stdlib_sort(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let list = match args.as_slice() {
+            [Value::List(items)] => items.clone(),
+            [_] => {
+                return Err(InterpreterError::TypeError(
+                    "SORT: argument must be a List".to_string(),
+                ));
+            }
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "SORT requires (List) argument".to_string(),
+                ));
+            }
+        };
+
+        let mut sorted = list;
+        sorted.sort_by(|a, b| value_cmp(a, b));
+        Ok(Value::List(sorted))
+    }
+
+    /// GROUP(list, key_op_name) -> Map[String, List]
+    ///
+    /// Groups list elements by calling the named operation to extract a key string.
+    fn stdlib_group(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (list, key_op) = match args.as_slice() {
+            [Value::List(items), Value::Str(op)] => (items.clone(), op.clone()),
+            [_, Value::Str(_)] => {
+                return Err(InterpreterError::TypeError(
+                    "GROUP: first argument must be a List".to_string(),
+                ));
+            }
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "GROUP requires (List, String) arguments".to_string(),
+                ));
+            }
+        };
+
+        let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        for item in &list {
+            let key = self.call_operation(&key_op, vec![item.clone()])?;
+            let key_str = match key {
+                Value::Str(s) => s,
+                other => other.to_string(),
+            };
+            groups.entry(key_str).or_default().push(item.clone());
+        }
+
+        let result: BTreeMap<String, Value> = groups
+            .into_iter()
+            .map(|(k, v)| (k, Value::List(v)))
+            .collect();
+        Ok(Value::Map(result))
+    }
+
+    /// TAKE(list, n) -> List
+    ///
+    /// Returns the first N elements of a list.
+    fn stdlib_take(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (list, n) = match args.as_slice() {
+            [Value::List(items), Value::Int(n)] => (items.clone(), *n as usize),
+            [_, Value::Int(_)] => {
+                return Err(InterpreterError::TypeError(
+                    "TAKE: first argument must be a List".to_string(),
+                ));
+            }
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "TAKE requires (List, Int) arguments".to_string(),
+                ));
+            }
+        };
+
+        Ok(Value::List(list.into_iter().take(n).collect()))
+    }
+
+    /// SKIP(list, n) -> List
+    ///
+    /// Skips the first N elements and returns the rest.
+    fn stdlib_skip(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (list, n) = match args.as_slice() {
+            [Value::List(items), Value::Int(n)] => (items.clone(), *n as usize),
+            [_, Value::Int(_)] => {
+                return Err(InterpreterError::TypeError(
+                    "SKIP: first argument must be a List".to_string(),
+                ));
+            }
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "SKIP requires (List, Int) arguments".to_string(),
+                ));
+            }
+        };
+
+        Ok(Value::List(list.into_iter().skip(n).collect()))
+    }
+
+    // =====================================================================
+    // core.io: READ, WRITE (MVP stubs — in-memory simulation)
+    // =====================================================================
+
+    /// READ(path) -> Result[String]
+    ///
+    /// MVP stub: simulates reading from a "file". In MVP, returns a stub
+    /// response since we don't do real I/O.
+    fn stdlib_read(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let path = match args.as_slice() {
+            [Value::Str(p)] => p.clone(),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "READ requires (String) argument".to_string(),
+                ));
+            }
+        };
+
+        // Record effect for idempotency
+        let effect_key = format!("read:{}", path);
+        self.runtime.record_effect(&effect_key, &format!("READ {}", path));
+
+        // MVP stub: return a deterministic placeholder
+        Ok(Value::Str(format!("[stub:read:{}]", path)))
+    }
+
+    /// WRITE(path, content) -> Result[Bool]
+    ///
+    /// MVP stub: simulates writing to a "file".
+    fn stdlib_write(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (path, content) = match args.as_slice() {
+            [Value::Str(p), Value::Str(c)] => (p.clone(), c.clone()),
+            [Value::Str(p), other] => (p.clone(), other.to_string()),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "WRITE requires (String, value) arguments".to_string(),
+                ));
+            }
+        };
+
+        let effect_key = format!("write:{}", path);
+        if !self.runtime.record_effect(&effect_key, &format!("WRITE {} ({} bytes)", path, content.len())) {
+            // Already committed — skip (idempotency)
+            return Ok(Value::Bool(true));
+        }
+        self.runtime.commit_effect(&effect_key);
+
+        Ok(Value::Bool(true))
+    }
+
+    // =====================================================================
+    // core.text: PARSE, FORMAT, REGEX, TOKENIZE
+    // =====================================================================
+
+    /// PARSE(text, format) -> Result[Value]
+    ///
+    /// Parses a string according to a format. MVP supports "json" format.
+    fn stdlib_parse(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (text, format) = match args.as_slice() {
+            [Value::Str(t), Value::Str(f)] => (t.clone(), f.clone()),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "PARSE requires (String, String) arguments".to_string(),
+                ));
+            }
+        };
+
+        match format.as_str() {
+            "json" => {
+                match serde_json::from_str::<serde_json::Value>(&text) {
+                    Ok(json_val) => Ok(Value::from_json(&json_val)),
+                    Err(e) => Ok(Value::Failure {
+                        code: "PARSE_ERROR".to_string(),
+                        message: format!("JSON parse error: {}", e),
+                        details: Box::new(Value::Str(text)),
+                    }),
+                }
+            }
+            "int" => {
+                match text.trim().parse::<i64>() {
+                    Ok(n) => Ok(Value::Int(n)),
+                    Err(e) => Ok(Value::Failure {
+                        code: "PARSE_ERROR".to_string(),
+                        message: format!("integer parse error: {}", e),
+                        details: Box::new(Value::Str(text)),
+                    }),
+                }
+            }
+            "float" => {
+                match text.trim().parse::<f64>() {
+                    Ok(f) => Ok(Value::Float(f)),
+                    Err(e) => Ok(Value::Failure {
+                        code: "PARSE_ERROR".to_string(),
+                        message: format!("float parse error: {}", e),
+                        details: Box::new(Value::Str(text)),
+                    }),
+                }
+            }
+            _ => Ok(Value::Failure {
+                code: "NOT_IMPLEMENTED".to_string(),
+                message: format!("PARSE format '{}' not supported in MVP", format),
+                details: Box::new(Value::None),
+            }),
+        }
+    }
+
+    /// FORMAT(template, args_map) -> String
+    ///
+    /// Simple string formatting. Replaces `{key}` placeholders with values from the map.
+    fn stdlib_format(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (template, substitutions) = match args.as_slice() {
+            [Value::Str(t), Value::Map(m)] => (t.clone(), m.clone()),
+            [Value::Str(t)] => (t.clone(), BTreeMap::new()),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "FORMAT requires (String) or (String, Map) arguments".to_string(),
+                ));
+            }
+        };
+
+        let mut result = template;
+        for (key, val) in &substitutions {
+            let placeholder = format!("{{{}}}", key);
+            let replacement = match val {
+                Value::Str(s) => s.clone(),
+                other => other.to_string(),
+            };
+            result = result.replace(&placeholder, &replacement);
+        }
+        Ok(Value::Str(result))
+    }
+
+    /// REGEX(text, pattern) -> Result[List[String]]
+    ///
+    /// MVP: simple substring matching (not full regex). Returns list of matches.
+    fn stdlib_regex(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (text, pattern) = match args.as_slice() {
+            [Value::Str(t), Value::Str(p)] => (t.clone(), p.clone()),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "REGEX requires (String, String) arguments".to_string(),
+                ));
+            }
+        };
+
+        // MVP: simple substring find (not full regex engine)
+        let mut matches = Vec::new();
+        let mut start = 0;
+        while let Some(pos) = text[start..].find(&pattern) {
+            matches.push(Value::Str(pattern.clone()));
+            start += pos + pattern.len();
+        }
+        Ok(Value::List(matches))
+    }
+
+    /// TOKENIZE(text, delimiter) -> List[String]
+    ///
+    /// Splits text by delimiter into a list of strings.
+    fn stdlib_tokenize(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (text, delimiter) = match args.as_slice() {
+            [Value::Str(t), Value::Str(d)] => (t.clone(), d.clone()),
+            [Value::Str(t)] => (t.clone(), " ".to_string()),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "TOKENIZE requires (String) or (String, String) arguments".to_string(),
+                ));
+            }
+        };
+
+        let tokens: Vec<Value> = text
+            .split(&delimiter)
+            .filter(|s| !s.is_empty())
+            .map(|s| Value::Str(s.to_string()))
+            .collect();
+        Ok(Value::List(tokens))
+    }
+
+    // =====================================================================
+    // core.http: GET, POST (MVP stubs)
+    // =====================================================================
+
+    /// GET(url) -> Result[String]
+    ///
+    /// MVP stub: returns a deterministic placeholder. Real HTTP deferred.
+    fn stdlib_http_get(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let url = match args.as_slice() {
+            [Value::Str(u)] => u.clone(),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "GET requires (String) argument".to_string(),
+                ));
+            }
+        };
+
+        let effect_key = format!("http-get:{}", url);
+        self.runtime.record_effect(&effect_key, &format!("GET {}", url));
+
+        Ok(Value::Str(format!("[stub:get:{}]", url)))
+    }
+
+    /// POST(url, body) -> Result[String]
+    ///
+    /// MVP stub: returns a deterministic placeholder.
+    fn stdlib_http_post(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (url, body) = match args.as_slice() {
+            [Value::Str(u), body] => (u.clone(), body.clone()),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "POST requires (String, value) arguments".to_string(),
+                ));
+            }
+        };
+
+        let effect_key = format!("http-post:{}", url);
+        if !self.runtime.record_effect(&effect_key, &format!("POST {}", url)) {
+            // Already committed — idempotency skip
+            return Ok(Value::Str("[stub:post:skipped]".to_string()));
+        }
+        self.runtime.commit_effect(&effect_key);
+
+        Ok(Value::Str(format!("[stub:post:{}:{}]", url, body)))
+    }
+
+    // =====================================================================
+    // agent.llm: GENERATE, CLASSIFY, EXTRACT (MVP stubs)
+    // =====================================================================
+
+    /// GENERATE(prompt) -> Result[String]
+    ///
+    /// MVP stub: returns a deterministic placeholder response.
+    fn stdlib_llm_generate(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let prompt = match args.as_slice() {
+            [Value::Str(p)] => p.clone(),
+            [p] => p.to_string(),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "GENERATE requires (String) argument".to_string(),
+                ));
+            }
+        };
+
+        let effect_key = format!("llm-generate:{}", simple_effect_hash(&prompt));
+        self.runtime.record_effect(&effect_key, "GENERATE");
+
+        Ok(Value::Str(format!("[stub:generate:{}]", truncate(&prompt, 32))))
+    }
+
+    /// CLASSIFY(text, categories) -> Result[String]
+    ///
+    /// MVP stub: returns the first category as classification.
+    fn stdlib_llm_classify(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (_text, categories) = match args.as_slice() {
+            [Value::Str(t), Value::List(cats)] => (t.clone(), cats.clone()),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "CLASSIFY requires (String, List) arguments".to_string(),
+                ));
+            }
+        };
+
+        // MVP stub: return the first category
+        let result = categories
+            .first()
+            .cloned()
+            .unwrap_or(Value::Str("unknown".to_string()));
+        Ok(result)
+    }
+
+    /// EXTRACT(text, schema) -> Result[Map]
+    ///
+    /// MVP stub: returns a map with the schema keys and placeholder values.
+    fn stdlib_llm_extract(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (_text, schema) = match args.as_slice() {
+            [Value::Str(t), Value::Map(s)] => (t.clone(), s.clone()),
+            [Value::Str(t), Value::List(fields)] => {
+                let mut m = BTreeMap::new();
+                for field in fields {
+                    if let Value::Str(f) = field {
+                        m.insert(f.clone(), Value::Str("[extracted]".to_string()));
+                    }
+                }
+                (t.clone(), m)
+            }
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "EXTRACT requires (String, Map) or (String, List) arguments".to_string(),
+                ));
+            }
+        };
+
+        // MVP stub: return map with placeholder values
+        let result: BTreeMap<String, Value> = schema
+            .keys()
+            .map(|k| (k.clone(), Value::Str("[extracted]".to_string())))
+            .collect();
+        Ok(Value::Map(result))
+    }
+
+    // =====================================================================
+    // agent.memory: REMEMBER, RECALL, FORGET (in-memory store)
+    // =====================================================================
+
+    /// REMEMBER(key, value) -> Bool
+    ///
+    /// Stores a value in the agent's memory (runtime registers namespace).
+    fn stdlib_memory_remember(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let (key, value) = match args.as_slice() {
+            [Value::Str(k), v] => (k.clone(), v.clone()),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "REMEMBER requires (String, value) arguments".to_string(),
+                ));
+            }
+        };
+
+        let mem_key = format!("_memory:{}", key);
+        self.runtime.reg_set(mem_key, value);
+        Ok(Value::Bool(true))
+    }
+
+    /// RECALL(key) -> Result[Value]
+    ///
+    /// Retrieves a value from agent memory. Returns FAILURE if not found.
+    fn stdlib_memory_recall(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let key = match args.as_slice() {
+            [Value::Str(k)] => k.clone(),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "RECALL requires (String) argument".to_string(),
+                ));
+            }
+        };
+
+        let mem_key = format!("_memory:{}", key);
+        match self.runtime.reg_get(&mem_key) {
+            Some(val) => Ok(val.clone()),
+            None => Ok(Value::Failure {
+                code: "NOT_FOUND".to_string(),
+                message: format!("no memory entry for key '{}'", key),
+                details: Box::new(Value::Str(key)),
+            }),
+        }
+    }
+
+    /// FORGET(key) -> Bool
+    ///
+    /// Removes a value from agent memory. Returns true if found and removed.
+    fn stdlib_memory_forget(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
+        let key = match args.as_slice() {
+            [Value::Str(k)] => k.clone(),
+            _ => {
+                return Err(InterpreterError::TypeError(
+                    "FORGET requires (String) argument".to_string(),
+                ));
+            }
+        };
+
+        let mem_key = format!("_memory:{}", key);
+        let existed = self.runtime.reg_remove(&mem_key).is_some();
+        Ok(Value::Bool(existed))
     }
 
     // =====================================================================
@@ -811,14 +1315,15 @@ impl Interpreter {
 
             // ----- CHECKPOINT ------------------------------------------------
             Statement::Checkpoint { .. } => {
-                let state = Value::Map(
-                    self.runtime
-                        .registers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
+                let agent_id = self
+                    .active_agent
+                    .clone()
+                    .unwrap_or_else(|| "runtime".to_string());
+                let _id = self.runtime.create_full_checkpoint(
+                    &agent_id,
+                    &self.runtime.registers.clone(),
+                    &self.mutables,
                 );
-                let _id = self.runtime.create_checkpoint("runtime", state);
                 Ok(StmtResult::Continue)
             }
 
@@ -1272,6 +1777,57 @@ fn eval_unary_op(
             "unsupported unary operation: {:?} {}",
             op, operand
         ))),
+    }
+}
+
+// =========================================================================
+// Stdlib helper functions
+// =========================================================================
+
+/// Compare two Values for sorting. Uses numeric ordering for ints/floats,
+/// lexicographic for strings, and type-tag ordering for mixed types.
+fn value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Int(x), Value::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        // Different types: order by type tag
+        _ => type_tag(a).cmp(&type_tag(b)),
+    }
+}
+
+/// Assign a numeric tag to each Value variant for mixed-type sorting.
+fn type_tag(v: &Value) -> u8 {
+    match v {
+        Value::None => 0,
+        Value::Bool(_) => 1,
+        Value::Int(_) => 2,
+        Value::Float(_) => 3,
+        Value::Str(_) => 4,
+        Value::List(_) => 5,
+        Value::Map(_) => 6,
+        _ => 7,
+    }
+}
+
+/// Simple hash for effect idempotency keys.
+fn simple_effect_hash(input: &str) -> String {
+    let mut hash: u64 = 5381;
+    for byte in input.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(byte as u64);
+    }
+    format!("{:08x}", hash & 0xFFFFFFFF)
+}
+
+/// Truncate a string to max_len chars, appending "..." if truncated.
+fn truncate(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len])
     }
 }
 
@@ -2877,6 +3433,561 @@ mod tests {
             assert!(!event.agent_id.is_empty(), "agent_id must not be empty");
             assert!(!event.task_id.is_empty(), "task_id must not be empty");
             assert_eq!(event.profile, "mvp-0.1");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: SORT tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stdlib_sort_integers() {
+        let src = r#"
+            OPERATION sort_test => BODY { EMIT SORT([3, 1, 4, 1, 5, 9, 2, 6]) }
+        "#;
+        let result = run_op(src, "sort_test", vec![]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Int(1), Value::Int(1), Value::Int(2), Value::Int(3),
+                Value::Int(4), Value::Int(5), Value::Int(6), Value::Int(9),
+            ])
+        );
+    }
+
+    #[test]
+    fn stdlib_sort_strings() {
+        let src = r#"
+            OPERATION sort_test => BODY { EMIT SORT(["banana", "apple", "cherry"]) }
+        "#;
+        let result = run_op(src, "sort_test", vec![]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Str("apple".into()),
+                Value::Str("banana".into()),
+                Value::Str("cherry".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn stdlib_sort_empty() {
+        let src = r#"
+            OPERATION sort_test => BODY { EMIT SORT([]) }
+        "#;
+        let result = run_op(src, "sort_test", vec![]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: GROUP tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stdlib_group_basic() {
+        let src = r#"
+            OPERATION get_parity =>
+                INPUT n: Int64
+                BODY {
+                    STORE rem = n % 2
+                    MATCH rem => {
+                        WHEN 0 -> { EMIT "even" }
+                        OTHERWISE -> { EMIT "odd" }
+                    }
+                }
+            OPERATION test => BODY { EMIT GROUP([1, 2, 3, 4], "get_parity") }
+            PIPELINE Main => test
+        "#;
+        let result = run_source(src).unwrap();
+        match result {
+            Value::Map(map) => {
+                assert!(map.contains_key("even"));
+                assert!(map.contains_key("odd"));
+                if let Value::List(evens) = &map["even"] {
+                    assert_eq!(evens.len(), 2);
+                }
+                if let Value::List(odds) = &map["odd"] {
+                    assert_eq!(odds.len(), 2);
+                }
+            }
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: TAKE / SKIP tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stdlib_take_basic() {
+        let src = r#"
+            OPERATION test => BODY { EMIT TAKE([10, 20, 30, 40, 50], 3) }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(10), Value::Int(20), Value::Int(30)])
+        );
+    }
+
+    #[test]
+    fn stdlib_take_more_than_available() {
+        let src = r#"
+            OPERATION test => BODY { EMIT TAKE([1, 2], 5) }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(1), Value::Int(2)])
+        );
+    }
+
+    #[test]
+    fn stdlib_skip_basic() {
+        let src = r#"
+            OPERATION test => BODY { EMIT SKIP([10, 20, 30, 40, 50], 2) }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(30), Value::Int(40), Value::Int(50)])
+        );
+    }
+
+    #[test]
+    fn stdlib_skip_all() {
+        let src = r#"
+            OPERATION test => BODY { EMIT SKIP([1, 2, 3], 10) }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: PARSE / FORMAT / REGEX / TOKENIZE tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stdlib_parse_json() {
+        let src = r#"
+            OPERATION test => BODY { EMIT PARSE("{\"x\": 42}", "json") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Map(m) => {
+                assert_eq!(m.get("x"), Some(&Value::Int(42)));
+            }
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stdlib_parse_int() {
+        let src = r#"
+            OPERATION test => BODY { EMIT PARSE("42", "int") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn stdlib_parse_invalid_returns_failure() {
+        let src = r#"
+            OPERATION test => BODY { EMIT PARSE("not_a_number", "int") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Failure { code, .. } => assert_eq!(code, "PARSE_ERROR"),
+            other => panic!("expected FAILURE, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stdlib_format_basic() {
+        let src = r#"
+            OPERATION test => BODY { EMIT FORMAT("Hello {name}!", {"name": "world"}) }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(result, Value::Str("Hello world!".into()));
+    }
+
+    #[test]
+    fn stdlib_tokenize_basic() {
+        let src = r#"
+            OPERATION test => BODY { EMIT TOKENIZE("a,b,c", ",") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Str("a".into()),
+                Value::Str("b".into()),
+                Value::Str("c".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn stdlib_tokenize_spaces() {
+        let src = r#"
+            OPERATION test => BODY { EMIT TOKENIZE("hello world foo") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Str("hello".into()),
+                Value::Str("world".into()),
+                Value::Str("foo".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn stdlib_regex_finds_matches() {
+        let src = r#"
+            OPERATION test => BODY { EMIT REGEX("hello world hello", "hello") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::List(matches) => assert_eq!(matches.len(), 2),
+            other => panic!("expected List, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: HTTP stub tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stdlib_http_get_stub() {
+        let src = r#"
+            OPERATION test => BODY { EMIT GET("https://example.com") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Str(s) => assert!(s.contains("stub:get")),
+            other => panic!("expected Str, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stdlib_http_post_stub() {
+        let src = r#"
+            OPERATION test => BODY { EMIT POST("https://example.com/api", "data") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Str(s) => assert!(s.contains("stub:post")),
+            other => panic!("expected Str, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: LLM stub tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stdlib_llm_generate_stub() {
+        let src = r#"
+            OPERATION test => BODY { EMIT GENERATE("Tell me a joke") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Str(s) => assert!(s.contains("stub:generate")),
+            other => panic!("expected Str, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stdlib_llm_classify_stub() {
+        let src = r#"
+            OPERATION test => BODY { EMIT CLASSIFY("good product", ["positive", "negative"]) }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(result, Value::Str("positive".into()));
+    }
+
+    #[test]
+    fn stdlib_llm_extract_stub() {
+        let src = r#"
+            OPERATION test => BODY { EMIT EXTRACT("John is 30", {"name": "String", "age": "Int"}) }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Map(m) => {
+                assert!(m.contains_key("name"));
+                assert!(m.contains_key("age"));
+            }
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: Memory tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stdlib_memory_remember_recall() {
+        let src = r#"
+            OPERATION test => BODY {
+                STORE _ = REMEMBER("user_name", "Alice")
+                EMIT RECALL("user_name")
+            }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(result, Value::Str("Alice".into()));
+    }
+
+    #[test]
+    fn stdlib_memory_recall_missing() {
+        let src = r#"
+            OPERATION test => BODY { EMIT RECALL("nonexistent") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Failure { code, .. } => assert_eq!(code, "NOT_FOUND"),
+            other => panic!("expected FAILURE, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stdlib_memory_forget() {
+        let src = r#"
+            OPERATION test => BODY {
+                STORE _ = REMEMBER("key1", "value1")
+                STORE _ = FORGET("key1")
+                EMIT RECALL("key1")
+            }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Failure { code, .. } => assert_eq!(code, "NOT_FOUND"),
+            other => panic!("expected FAILURE after FORGET, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stdlib_memory_forget_nonexistent() {
+        let src = r#"
+            OPERATION test => BODY { EMIT FORGET("no_such_key") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: IO stub tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stdlib_read_stub() {
+        let src = r#"
+            OPERATION test => BODY { EMIT READ("data.txt") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        match result {
+            Value::Str(s) => assert!(s.contains("stub:read:data.txt")),
+            other => panic!("expected Str, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stdlib_write_stub() {
+        let src = r#"
+            OPERATION test => BODY { EMIT WRITE("output.txt", "hello") }
+        "#;
+        let result = run_op(src, "test", vec![]).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: Checkpoint/resume tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn checkpoint_creates_with_full_state() {
+        let src = r#"
+            OPERATION test => BODY {
+                STORE x = 42
+                CHECKPOINT
+                EMIT x
+            }
+            PIPELINE Main => test
+        "#;
+        let program = al_parser::parse(src).expect("parse should succeed");
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let result = interp.run().unwrap();
+        assert_eq!(result, Value::Int(42));
+
+        // Verify checkpoint was created
+        assert!(!interp.runtime.checkpoint_store.is_empty());
+    }
+
+    #[test]
+    fn checkpoint_resume_restores_registers() {
+        // Manually create a checkpoint and resume it
+        let mut interp = Interpreter::new();
+        interp.runtime.reg_set("x", Value::Int(100));
+        interp.runtime.reg_set("name", Value::Str("test".into()));
+        interp.mutables.insert("x".to_string());
+
+        let cp_id = interp.runtime.create_full_checkpoint(
+            "runtime",
+            &interp.runtime.registers.clone(),
+            &interp.mutables,
+        );
+
+        // Clear state
+        interp.runtime.registers.clear();
+        interp.mutables.clear();
+
+        // Resume from checkpoint
+        let (regs, muts) = interp.runtime.resume_checkpoint(&cp_id).unwrap();
+        assert_eq!(regs.get("x"), Some(&Value::Int(100)));
+        assert_eq!(regs.get("name"), Some(&Value::Str("test".into())));
+        assert!(muts.contains("x"));
+    }
+
+    #[test]
+    fn checkpoint_resume_emits_audit_events() {
+        let mut interp = Interpreter::new();
+        interp.runtime.reg_set("x", Value::Int(1));
+        let cp_id = interp.runtime.create_full_checkpoint(
+            "runtime",
+            &interp.runtime.registers.clone(),
+            &std::collections::HashSet::new(),
+        );
+
+        let _ = interp.runtime.resume_checkpoint(&cp_id).unwrap();
+
+        let event_types: Vec<_> = interp.runtime.audit_log.iter()
+            .map(|e| e.event_type)
+            .collect();
+        assert!(event_types.contains(&AuditEventType::CheckpointCreated));
+        assert!(event_types.contains(&AuditEventType::CheckpointResumed));
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: Effect journal tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn effect_journal_records_from_stdlib() {
+        let src = r#"
+            OPERATION test => BODY { EMIT READ("file.txt") }
+            PIPELINE Main => test
+        "#;
+        let program = al_parser::parse(src).expect("parse should succeed");
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _ = interp.run().unwrap();
+
+        // Verify effect was recorded
+        assert!(!interp.runtime.effect_journal.entries().is_empty());
+        assert_eq!(interp.runtime.effect_journal.entries()[0].idempotency_key, "read:file.txt");
+    }
+
+    #[test]
+    fn effect_journal_audit_events() {
+        let src = r#"
+            OPERATION test => BODY { EMIT WRITE("out.txt", "data") }
+            PIPELINE Main => test
+        "#;
+        let program = al_parser::parse(src).expect("parse should succeed");
+        let mut interp = Interpreter::new();
+        interp.load_program(&program);
+        let _ = interp.run().unwrap();
+
+        let event_types: Vec<_> = interp.runtime.audit_log.iter()
+            .map(|e| e.event_type)
+            .collect();
+        assert!(event_types.contains(&AuditEventType::EffectRecorded));
+    }
+
+    #[test]
+    fn effect_journal_preserved_in_checkpoint() {
+        let mut interp = Interpreter::new();
+        interp.runtime.record_effect("effect-1", "test effect");
+        interp.runtime.commit_effect("effect-1");
+
+        let cp_id = interp.runtime.create_full_checkpoint(
+            "runtime",
+            &interp.runtime.registers.clone(),
+            &std::collections::HashSet::new(),
+        );
+
+        // Clear journal
+        interp.runtime.effect_journal.clear();
+        assert!(interp.runtime.effect_journal.entries().is_empty());
+
+        // Resume restores journal
+        let _ = interp.runtime.resume_checkpoint(&cp_id).unwrap();
+        assert!(interp.runtime.is_effect_committed("effect-1"));
+    }
+
+    // -----------------------------------------------------------------
+    // Round 6: Audit schema coverage for new event types
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn audit_effect_recorded_event_schema() {
+        let mut interp = Interpreter::new();
+        interp.runtime.record_effect("test-key", "test desc");
+
+        let events: Vec<_> = interp.runtime.audit_log.iter()
+            .filter(|e| e.event_type == AuditEventType::EffectRecorded)
+            .collect();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].details["idempotency_key"], "test-key");
+        assert_eq!(events[0].details["description"], "test desc");
+        assert_eq!(events[0].profile, "mvp-0.1");
+    }
+
+    #[test]
+    fn audit_checkpoint_resumed_event_schema() {
+        let mut interp = Interpreter::new();
+        interp.runtime.reg_set("x", Value::Int(1));
+        let cp_id = interp.runtime.create_full_checkpoint(
+            "runtime",
+            &interp.runtime.registers.clone(),
+            &std::collections::HashSet::new(),
+        );
+        let _ = interp.runtime.resume_checkpoint(&cp_id).unwrap();
+
+        let events: Vec<_> = interp.runtime.audit_log.iter()
+            .filter(|e| e.event_type == AuditEventType::CheckpointResumed)
+            .collect();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].details["registers_restored"].as_i64().unwrap() > 0);
+        assert_eq!(events[0].profile, "mvp-0.1");
+    }
+
+    #[test]
+    fn audit_all_new_event_types_jsonl_valid() {
+        let mut interp = Interpreter::new();
+        // Trigger various event types
+        interp.runtime.record_effect("k1", "desc");
+        interp.runtime.reg_set("x", Value::Int(1));
+        let cp_id = interp.runtime.create_full_checkpoint(
+            "runtime",
+            &interp.runtime.registers.clone(),
+            &std::collections::HashSet::new(),
+        );
+        let _ = interp.runtime.resume_checkpoint(&cp_id).unwrap();
+
+        let jsonl_lines = interp.runtime.audit_to_jsonl();
+        assert!(jsonl_lines.len() >= 3);
+        for line in &jsonl_lines {
+            assert!(!line.contains('\n'), "JSONL line must not contain newlines");
+            let parsed: serde_json::Value = serde_json::from_str(line)
+                .expect("each JSONL line must be valid JSON");
+            assert!(parsed["event_id"].is_string());
+            assert!(parsed["timestamp"].is_string());
+            assert!(parsed["event_type"].is_string());
+            assert_eq!(parsed["profile"], "mvp-0.1");
         }
     }
 }

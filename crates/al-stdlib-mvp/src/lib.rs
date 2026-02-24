@@ -108,8 +108,21 @@ pub struct SignaturesFile {
     pub operations: std::collections::HashMap<String, OpSignature>,
 }
 
-/// Names of stdlib data operations that have runtime implementations.
-pub const IMPLEMENTED_STDLIB_OPS: &[&str] = &["FILTER", "MAP", "REDUCE"];
+/// Names of all stdlib operations that have runtime implementations.
+pub const IMPLEMENTED_STDLIB_OPS: &[&str] = &[
+    // core.data
+    "FILTER", "MAP", "REDUCE", "SORT", "GROUP", "TAKE", "SKIP",
+    // core.io
+    "READ", "WRITE",
+    // core.text
+    "PARSE", "FORMAT", "REGEX", "TOKENIZE",
+    // core.http
+    "GET", "POST",
+    // agent.llm
+    "GENERATE", "CLASSIFY", "EXTRACT",
+    // agent.memory
+    "REMEMBER", "RECALL", "FORGET",
+];
 
 /// Load and parse the STDLIB_MVP_SIGNATURES.json from the embedded content.
 pub fn load_signatures() -> SignaturesFile {
@@ -184,14 +197,36 @@ mod tests {
     }
 
     #[test]
-    fn signatures_lock_all_ops_in_core_data() {
+    fn signatures_lock_op_count() {
         let sigs = load_signatures();
+        assert_eq!(
+            sigs.operations.len(),
+            IMPLEMENTED_STDLIB_OPS.len(),
+            "signatures file should have exactly as many ops as IMPLEMENTED_STDLIB_OPS"
+        );
+    }
+
+    #[test]
+    fn signatures_lock_module_assignment() {
+        let sigs = load_signatures();
+        let expected_modules: std::collections::HashMap<&str, &str> = [
+            ("FILTER", "core.data"), ("MAP", "core.data"), ("REDUCE", "core.data"),
+            ("SORT", "core.data"), ("GROUP", "core.data"), ("TAKE", "core.data"), ("SKIP", "core.data"),
+            ("READ", "core.io"), ("WRITE", "core.io"),
+            ("PARSE", "core.text"), ("FORMAT", "core.text"), ("REGEX", "core.text"), ("TOKENIZE", "core.text"),
+            ("GET", "core.http"), ("POST", "core.http"),
+            ("GENERATE", "agent.llm"), ("CLASSIFY", "agent.llm"), ("EXTRACT", "agent.llm"),
+            ("REMEMBER", "agent.memory"), ("RECALL", "agent.memory"), ("FORGET", "agent.memory"),
+        ].into_iter().collect();
+
         for (name, sig) in &sigs.operations {
-            assert_eq!(
-                sig.module, "core.data",
-                "op {} should be in core.data module",
-                name
-            );
+            if let Some(expected) = expected_modules.get(name.as_str()) {
+                assert_eq!(
+                    &sig.module, expected,
+                    "op {} should be in module {}, found {}",
+                    name, expected, sig.module
+                );
+            }
         }
     }
 
@@ -199,11 +234,28 @@ mod tests {
     fn signatures_lock_core_data_ops_not_fallible() {
         let sigs = load_signatures();
         for (name, sig) in &sigs.operations {
-            assert!(
-                !sig.fallible,
-                "core.data op {} should not be fallible",
-                name
-            );
+            if sig.module == "core.data" {
+                assert!(
+                    !sig.fallible,
+                    "core.data op {} should not be fallible",
+                    name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn signatures_lock_fallible_modules() {
+        let sigs = load_signatures();
+        let fallible_modules = ["core.io", "core.text", "core.http", "agent.llm", "agent.memory"];
+        for (name, sig) in &sigs.operations {
+            if fallible_modules.contains(&sig.module.as_str()) {
+                assert!(
+                    sig.fallible,
+                    "{} module op {} should be fallible",
+                    sig.module, name
+                );
+            }
         }
     }
 
@@ -239,20 +291,76 @@ mod tests {
     }
 
     #[test]
+    fn signatures_lock_sort_shape() {
+        let sigs = load_signatures();
+        let sort = sigs.operations.get("SORT").expect("SORT must exist");
+        assert_eq!(sort.inputs.len(), 1);
+        assert_eq!(sort.inputs[0].name, "list");
+        assert_eq!(sort.output, "List[T]");
+    }
+
+    #[test]
+    fn signatures_lock_take_skip_shape() {
+        let sigs = load_signatures();
+        let take = sigs.operations.get("TAKE").expect("TAKE must exist");
+        assert_eq!(take.inputs.len(), 2);
+        assert_eq!(take.inputs[1].name, "n");
+
+        let skip = sigs.operations.get("SKIP").expect("SKIP must exist");
+        assert_eq!(skip.inputs.len(), 2);
+        assert_eq!(skip.inputs[1].name, "n");
+    }
+
+    #[test]
+    fn signatures_lock_memory_ops_shape() {
+        let sigs = load_signatures();
+        let remember = sigs.operations.get("REMEMBER").expect("REMEMBER must exist");
+        assert_eq!(remember.inputs.len(), 2);
+        assert_eq!(remember.module, "agent.memory");
+
+        let recall = sigs.operations.get("RECALL").expect("RECALL must exist");
+        assert_eq!(recall.inputs.len(), 1);
+
+        let forget = sigs.operations.get("FORGET").expect("FORGET must exist");
+        assert_eq!(forget.inputs.len(), 1);
+    }
+
+    #[test]
     fn signatures_lock_consistency_with_registry() {
         let sigs = load_signatures();
-        // Every implemented op must appear in both the signature file and the registry.
-        let registry_ops = mvp_ops("core.data").unwrap();
-        for op_name in IMPLEMENTED_STDLIB_OPS {
+        // Every implemented op in signatures must belong to a valid MVP module.
+        for (name, sig) in &sigs.operations {
             assert!(
-                registry_ops.contains(op_name),
-                "implemented op {} not in core.data registry",
-                op_name
+                is_mvp_module(&sig.module),
+                "op {} has module '{}' which is not an MVP module",
+                name, sig.module
             );
+            // And must appear in that module's op list.
+            let module_ops = mvp_ops(&sig.module).unwrap();
+            assert!(
+                module_ops.contains(&name.as_str()),
+                "op {} not in {} registry",
+                name, sig.module
+            );
+        }
+        // Every implemented op must be in the signatures file.
+        for op_name in IMPLEMENTED_STDLIB_OPS {
             assert!(
                 sigs.operations.contains_key(*op_name),
                 "implemented op {} not in signatures file",
                 op_name
+            );
+        }
+    }
+
+    #[test]
+    fn signatures_lock_all_ops_have_description() {
+        let sigs = load_signatures();
+        for (name, sig) in &sigs.operations {
+            assert!(
+                !sig.description.is_empty(),
+                "op {} has empty description",
+                name
             );
         }
     }

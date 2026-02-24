@@ -498,6 +498,10 @@ pub enum AuditEventType {
     PipelineStarted,
     /// A built-in stdlib operation was invoked.
     StdlibCall,
+    /// An effect was recorded in the effect journal.
+    EffectRecorded,
+    /// A checkpoint was resumed with state restoration.
+    CheckpointResumed,
 }
 
 impl std::fmt::Display for AuditEventType {
@@ -512,6 +516,8 @@ impl std::fmt::Display for AuditEventType {
             Self::OperationCalled => "OPERATION_CALLED",
             Self::PipelineStarted => "PIPELINE_STARTED",
             Self::StdlibCall => "STDLIB_CALL",
+            Self::EffectRecorded => "EFFECT_RECORDED",
+            Self::CheckpointResumed => "CHECKPOINT_RESUMED",
         };
         write!(f, "{}", s)
     }
@@ -819,6 +825,8 @@ mod tests {
             (AuditEventType::OperationCalled, "OPERATION_CALLED"),
             (AuditEventType::PipelineStarted, "PIPELINE_STARTED"),
             (AuditEventType::StdlibCall, "STDLIB_CALL"),
+            (AuditEventType::EffectRecorded, "EFFECT_RECORDED"),
+            (AuditEventType::CheckpointResumed, "CHECKPOINT_RESUMED"),
         ];
 
         for (event_type, expected_str) in types {

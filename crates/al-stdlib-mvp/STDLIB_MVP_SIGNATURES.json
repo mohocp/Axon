@@ -1,7 +1,7 @@
 {
   "version": "mvp-0.1",
   "generated": "2026-02-24",
-  "description": "Canonical signatures for implemented AgentLang stdlib data operations.",
+  "description": "Canonical signatures for all implemented AgentLang stdlib MVP operations.",
   "operations": {
     "FILTER": {
       "module": "core.data",
@@ -33,6 +33,180 @@
       "output": "U",
       "fallible": false,
       "description": "Folds a list by calling reducer(accumulator, element) for each element."
+    },
+    "SORT": {
+      "module": "core.data",
+      "inputs": [
+        { "name": "list", "type": "List[T]" }
+      ],
+      "output": "List[T]",
+      "fallible": false,
+      "description": "Sorts a list using natural ordering (numeric for numbers, lexicographic for strings)."
+    },
+    "GROUP": {
+      "module": "core.data",
+      "inputs": [
+        { "name": "list", "type": "List[T]" },
+        { "name": "key_op", "type": "String" }
+      ],
+      "output": "Map[String, List[T]]",
+      "fallible": false,
+      "description": "Groups list elements by calling key_op to extract a grouping key string."
+    },
+    "TAKE": {
+      "module": "core.data",
+      "inputs": [
+        { "name": "list", "type": "List[T]" },
+        { "name": "n", "type": "Int" }
+      ],
+      "output": "List[T]",
+      "fallible": false,
+      "description": "Returns the first N elements of a list."
+    },
+    "SKIP": {
+      "module": "core.data",
+      "inputs": [
+        { "name": "list", "type": "List[T]" },
+        { "name": "n", "type": "Int" }
+      ],
+      "output": "List[T]",
+      "fallible": false,
+      "description": "Skips the first N elements and returns the rest."
+    },
+    "READ": {
+      "module": "core.io",
+      "inputs": [
+        { "name": "path", "type": "String" }
+      ],
+      "output": "Result[String]",
+      "fallible": true,
+      "description": "Reads content from a file path. MVP stub returns placeholder."
+    },
+    "WRITE": {
+      "module": "core.io",
+      "inputs": [
+        { "name": "path", "type": "String" },
+        { "name": "content", "type": "String" }
+      ],
+      "output": "Result[Bool]",
+      "fallible": true,
+      "description": "Writes content to a file path. MVP stub simulates write."
+    },
+    "PARSE": {
+      "module": "core.text",
+      "inputs": [
+        { "name": "text", "type": "String" },
+        { "name": "format", "type": "String" }
+      ],
+      "output": "Result[Value]",
+      "fallible": true,
+      "description": "Parses text according to format (json, int, float)."
+    },
+    "FORMAT": {
+      "module": "core.text",
+      "inputs": [
+        { "name": "template", "type": "String" },
+        { "name": "args", "type": "Map[String, Value]" }
+      ],
+      "output": "String",
+      "fallible": true,
+      "description": "Substitutes {key} placeholders in template with values from args map."
+    },
+    "REGEX": {
+      "module": "core.text",
+      "inputs": [
+        { "name": "text", "type": "String" },
+        { "name": "pattern", "type": "String" }
+      ],
+      "output": "Result[List[String]]",
+      "fallible": true,
+      "description": "Finds substring matches. MVP uses simple substring matching."
+    },
+    "TOKENIZE": {
+      "module": "core.text",
+      "inputs": [
+        { "name": "text", "type": "String" },
+        { "name": "delimiter", "type": "String" }
+      ],
+      "output": "List[String]",
+      "fallible": true,
+      "description": "Splits text by delimiter into a list of strings."
+    },
+    "GET": {
+      "module": "core.http",
+      "inputs": [
+        { "name": "url", "type": "String" }
+      ],
+      "output": "Result[String]",
+      "fallible": true,
+      "description": "HTTP GET request. MVP stub returns placeholder response."
+    },
+    "POST": {
+      "module": "core.http",
+      "inputs": [
+        { "name": "url", "type": "String" },
+        { "name": "body", "type": "Value" }
+      ],
+      "output": "Result[String]",
+      "fallible": true,
+      "description": "HTTP POST request. MVP stub returns placeholder response."
+    },
+    "GENERATE": {
+      "module": "agent.llm",
+      "inputs": [
+        { "name": "prompt", "type": "String" }
+      ],
+      "output": "Result[String]",
+      "fallible": true,
+      "description": "Generate text from a prompt. MVP stub returns placeholder."
+    },
+    "CLASSIFY": {
+      "module": "agent.llm",
+      "inputs": [
+        { "name": "text", "type": "String" },
+        { "name": "categories", "type": "List[String]" }
+      ],
+      "output": "Result[String]",
+      "fallible": true,
+      "description": "Classify text into one of the given categories. MVP returns first category."
+    },
+    "EXTRACT": {
+      "module": "agent.llm",
+      "inputs": [
+        { "name": "text", "type": "String" },
+        { "name": "schema", "type": "Map[String, String]" }
+      ],
+      "output": "Result[Map]",
+      "fallible": true,
+      "description": "Extract structured data from text. MVP returns placeholder values."
+    },
+    "REMEMBER": {
+      "module": "agent.memory",
+      "inputs": [
+        { "name": "key", "type": "String" },
+        { "name": "value", "type": "Value" }
+      ],
+      "output": "Bool",
+      "fallible": true,
+      "description": "Store a value in agent memory keyed by string."
+    },
+    "RECALL": {
+      "module": "agent.memory",
+      "inputs": [
+        { "name": "key", "type": "String" }
+      ],
+      "output": "Result[Value]",
+      "fallible": true,
+      "description": "Retrieve a value from agent memory by key. Returns FAILURE if not found."
+    },
+    "FORGET": {
+      "module": "agent.memory",
+      "inputs": [
+        { "name": "key", "type": "String" }
+      ],
+      "output": "Bool",
+      "fallible": true,
+      "description": "Remove a value from agent memory. Returns true if key existed."
     }
   }
 }

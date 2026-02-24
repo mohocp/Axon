@@ -25,7 +25,7 @@ pub mod interpreter;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use al_capabilities::{Capability, CapabilitySet, check_capability as cap_check};
-use al_checkpoint::{Checkpoint, CheckpointMeta, CheckpointStore};
+use al_checkpoint::{Checkpoint, CheckpointMeta, CheckpointStore, EffectJournal};
 use al_diagnostics::{
     AuditEvent, AuditEventType, ErrorCode, RuntimeFailure, MVP_PROFILE,
 };
@@ -441,6 +441,9 @@ pub struct Runtime {
     /// In-memory checkpoint store.
     pub checkpoint_store: CheckpointStore,
 
+    /// Effect journal for idempotency-safe resume.
+    pub effect_journal: EffectJournal,
+
     // -- Capability registry (global overrides) --------------------------------
 
     /// Per-agent capability overrides. If an agent appears here, these
@@ -460,6 +463,7 @@ impl std::fmt::Debug for Runtime {
             .field("locks", &self.locks.len())
             .field("agents", &self.agents.len())
             .field("audit_log", &self.audit_log.len())
+            .field("effect_journal", &self.effect_journal.entries().len())
             .finish()
     }
 }
@@ -489,6 +493,7 @@ impl Runtime {
             audit_log: Vec::new(),
             current_task_id: "runtime".to_string(),
             checkpoint_store: CheckpointStore::new(),
+            effect_journal: EffectJournal::new(),
             capability_overrides: HashMap::new(),
         }
     }
@@ -796,7 +801,7 @@ impl Runtime {
                 hash,
             },
             state: json_state,
-            effect_journal: vec![],
+            effect_journal: self.effect_journal.to_entries(),
         };
 
         self.checkpoint_store.create(checkpoint);
@@ -989,6 +994,152 @@ impl Runtime {
     /// Dequeue the next pending task, if any.
     pub fn dequeue_task(&mut self) -> Option<Task> {
         self.task_queue.pop_front()
+    }
+
+    // =======================================================================
+    // Effect journal methods
+    // =======================================================================
+
+    /// Record an effect in the effect journal. Returns `true` if newly recorded,
+    /// `false` if already committed (idempotency skip).
+    pub fn record_effect(&mut self, key: &str, description: &str) -> bool {
+        let is_new = self.effect_journal.record_effect(key, description);
+        if is_new {
+            self.emit_audit(
+                "runtime",
+                AuditEventType::EffectRecorded,
+                serde_json::json!({
+                    "idempotency_key": key,
+                    "description": description,
+                }),
+            );
+        }
+        is_new
+    }
+
+    /// Mark an effect as committed (successfully completed).
+    pub fn commit_effect(&mut self, key: &str) -> bool {
+        self.effect_journal.commit_effect(key)
+    }
+
+    /// Check if an effect has already been committed.
+    pub fn is_effect_committed(&self, key: &str) -> bool {
+        self.effect_journal.is_committed(key)
+    }
+
+    // =======================================================================
+    // Checkpoint with full state serialization
+    // =======================================================================
+
+    /// Create a checkpoint that captures the full interpreter state
+    /// (registers + effect journal) with version/hash validation.
+    pub fn create_full_checkpoint(
+        &mut self,
+        agent_id: &str,
+        registers: &HashMap<String, Value>,
+        mutables: &std::collections::HashSet<String>,
+    ) -> String {
+        let checkpoint_id = Uuid::new_v4().to_string();
+
+        // Serialize registers to JSON
+        let reg_json: serde_json::Map<String, serde_json::Value> = registers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_json()))
+            .collect();
+        let mutables_json: Vec<serde_json::Value> = mutables
+            .iter()
+            .map(|s| serde_json::Value::String(s.clone()))
+            .collect();
+
+        let state = serde_json::json!({
+            "registers": reg_json,
+            "mutables": mutables_json,
+        });
+
+        let state_str = serde_json::to_string(&state).unwrap_or_default();
+        let hash = simple_hash(&state_str);
+
+        let checkpoint = Checkpoint {
+            meta: CheckpointMeta {
+                checkpoint_id: checkpoint_id.clone(),
+                created_at: Utc::now().to_rfc3339(),
+                profile: MVP_PROFILE.to_string(),
+                schema_version: al_checkpoint::CHECKPOINT_SCHEMA_VERSION.to_string(),
+                hash,
+            },
+            state,
+            effect_journal: self.effect_journal.to_entries(),
+        };
+
+        self.checkpoint_store.create(checkpoint);
+
+        if let Some(agent) = self.agents.get_mut(agent_id) {
+            agent.status = AgentStatus::Checkpointed;
+        }
+
+        self.emit_audit(
+            agent_id,
+            AuditEventType::CheckpointCreated,
+            serde_json::json!({
+                "checkpoint_id": &checkpoint_id,
+                "has_effect_journal": !self.effect_journal.entries().is_empty(),
+            }),
+        );
+
+        checkpoint_id
+    }
+
+    /// Resume from a checkpoint, restoring registers and effect journal.
+    ///
+    /// Validates profile, schema version, and hash integrity.
+    /// Returns (registers, mutables_set) to be applied by the interpreter.
+    pub fn resume_checkpoint(
+        &mut self,
+        checkpoint_id: &str,
+    ) -> Result<(HashMap<String, Value>, std::collections::HashSet<String>), RuntimeFailure> {
+        // Validate profile + hash integrity
+        self.checkpoint_store
+            .validate_with_hash(checkpoint_id, MVP_PROFILE)?;
+        // Validate schema version
+        self.checkpoint_store
+            .validate_schema_version(checkpoint_id)?;
+
+        let checkpoint = self.checkpoint_store.restore(checkpoint_id)?;
+
+        // Restore effect journal from checkpoint
+        let journal = EffectJournal::from_entries(checkpoint.effect_journal.clone());
+        self.effect_journal = journal;
+
+        // Parse registers from state
+        let mut registers = HashMap::new();
+        if let Some(regs) = checkpoint.state.get("registers").and_then(|v| v.as_object()) {
+            for (k, v) in regs {
+                registers.insert(k.clone(), Value::from_json(v));
+            }
+        }
+
+        // Parse mutables set from state
+        let mut mutables = std::collections::HashSet::new();
+        if let Some(muts) = checkpoint.state.get("mutables").and_then(|v| v.as_array()) {
+            for m in muts {
+                if let Some(s) = m.as_str() {
+                    mutables.insert(s.to_string());
+                }
+            }
+        }
+
+        self.emit_audit(
+            "runtime",
+            AuditEventType::CheckpointResumed,
+            serde_json::json!({
+                "checkpoint_id": checkpoint_id,
+                "registers_restored": registers.len(),
+                "mutables_restored": mutables.len(),
+                "effects_restored": self.effect_journal.entries().len(),
+            }),
+        );
+
+        Ok((registers, mutables))
     }
 }
 
