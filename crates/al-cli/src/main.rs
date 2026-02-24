@@ -238,6 +238,20 @@ fn cmd_run(path: &str) {
     // Phase 4: Capability check (static)
     println!("Phase 4 (caps):  {} agents registered", checker.env.agents.len());
 
-    println!();
-    println!("All phases completed successfully.");
+    // Phase 5: Execute
+    let mut interp = al_runtime::interpreter::Interpreter::new();
+    interp.load_program(&program);
+
+    match interp.run() {
+        Ok(result) => {
+            println!("Phase 5 (exec):  OK");
+            println!();
+            println!("Result: {}", result);
+        }
+        Err(e) => {
+            eprintln!("Phase 5 (exec):  FAILED");
+            eprintln!("  {}", e);
+            process::exit(1);
+        }
+    }
 }

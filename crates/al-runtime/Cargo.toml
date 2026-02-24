@@ -10,6 +10,7 @@ al-hir = { path = "../al-hir" }
 al-types = { path = "../al-types" }
 al-capabilities = { path = "../al-capabilities" }
 al-checkpoint = { path = "../al-checkpoint" }
+al-parser = { path = "../al-parser" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

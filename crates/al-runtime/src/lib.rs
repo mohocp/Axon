@@ -18,6 +18,9 @@
 //! - Agent lifecycle management with capability enforcement.
 //! - Retry, escalation, assertion, fork/join, and checkpoint semantics.
 //! - Full audit logging via `al_diagnostics::AuditEvent`.
+//! - A tree-walking interpreter for end-to-end program execution (Round 5).
+
+pub mod interpreter;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 

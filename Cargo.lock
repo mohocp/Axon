@@ -104,6 +104,7 @@ dependencies = [
  "al-checkpoint",
  "al-diagnostics",
  "al-hir",
+ "al-parser",
  "al-types",
  "chrono",
  "serde",
