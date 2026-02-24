@@ -2462,4 +2462,91 @@ mod tests {
             ]
         );
     }
+
+    // ── Property-based tests ────────────────────────────────────────
+
+    mod proptest_lexer {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for valid AgentLang identifiers.
+        fn identifier_strategy() -> impl Strategy<Value = String> {
+            "[a-zA-Z_][a-zA-Z0-9_]{0,15}".prop_filter("not a keyword", |s| {
+                !matches!(
+                    s.as_str(),
+                    "TYPE" | "SCHEMA" | "AGENT" | "OPERATION" | "PIPELINE"
+                        | "BODY" | "INPUT" | "OUTPUT" | "REQUIRE" | "ENSURE"
+                        | "INVARIANT" | "STORE" | "MUTABLE" | "MATCH" | "WHEN"
+                        | "OTHERWISE" | "LOOP" | "EMIT" | "ASSERT" | "RETRY"
+                        | "ESCALATE" | "CHECKPOINT" | "RESUME" | "HALT"
+                        | "DELEGATE" | "TO" | "FORK" | "JOIN" | "SUCCESS"
+                        | "FAILURE" | "TRUE" | "FALSE" | "NONE" | "AND" | "OR"
+                        | "NOT" | "EQ" | "NEQ" | "GT" | "GTE" | "LT" | "LTE"
+                        | "max" | "strategy"
+                )
+            })
+        }
+
+        proptest! {
+            /// Any valid integer literal should lex to exactly one Integer token + EOF.
+            #[test]
+            fn lex_integer_never_panics(n in 0i64..1_000_000) {
+                let source = n.to_string();
+                let tokens = tokenize(&source).unwrap();
+                // Should have at least the integer token + EOF
+                prop_assert!(tokens.len() >= 2);
+                prop_assert!(matches!(&tokens[0].token, Token::Integer(v) if *v == n));
+            }
+
+            /// Any valid identifier should lex correctly.
+            #[test]
+            fn lex_identifier_never_panics(id in identifier_strategy()) {
+                let tokens = tokenize(&id).unwrap();
+                prop_assert!(tokens.len() >= 2);
+                prop_assert!(matches!(&tokens[0].token, Token::Identifier(s) if s == &id));
+            }
+
+            /// Arbitrary string inputs should never cause a panic (just errors).
+            #[test]
+            fn lex_arbitrary_no_panic(source in "[ -~]{0,100}") {
+                // Should either succeed or return a diagnostic, never panic.
+                let _ = tokenize(&source);
+            }
+
+            /// String literals with escaped content should lex.
+            #[test]
+            fn lex_string_literal(content in "[a-zA-Z0-9 ]{0,30}") {
+                let source = format!(r#""{}""#, content);
+                let tokens = tokenize(&source).unwrap();
+                prop_assert!(tokens.len() >= 2);
+                prop_assert!(matches!(&tokens[0].token, Token::StringLit(_)));
+            }
+
+            /// Keywords are recognized as tokens, not identifiers.
+            #[test]
+            fn lex_keyword_recognized(kw in prop::sample::select(vec![
+                "TYPE", "SCHEMA", "AGENT", "OPERATION", "PIPELINE",
+                "BODY", "INPUT", "OUTPUT", "EMIT", "STORE", "MUTABLE",
+            ])) {
+                let tokens = tokenize(kw).unwrap();
+                prop_assert!(tokens.len() >= 2);
+                // Should NOT be an Identifier
+                prop_assert!(!matches!(&tokens[0].token, Token::Identifier(_)));
+            }
+
+            /// Whitespace-separated tokens always produce valid spans.
+            #[test]
+            fn lex_spans_valid(
+                a in identifier_strategy(),
+                b in identifier_strategy()
+            ) {
+                let source = format!("{} {}", a, b);
+                let tokens = tokenize(&source).unwrap();
+                for tok in &tokens {
+                    prop_assert!(tok.span.line >= 1);
+                    prop_assert!(tok.span.column >= 1);
+                }
+            }
+        }
+    }
 }

@@ -1533,4 +1533,116 @@ OPERATION Route =>
             ));
         }
     }
+
+    // ── Property-based tests ────────────────────────────────────────
+
+    mod proptest_types {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for builtin type names.
+        fn builtin_type() -> impl Strategy<Value = &'static str> {
+            prop::sample::select(vec![
+                "Int64", "Float64", "Str", "Bool", "Int", "Float", "String",
+            ])
+        }
+
+        /// All AgentLang keywords to filter.
+        const KEYWORDS: &[&str] = &[
+            "TYPE", "SCHEMA", "AGENT", "OPERATION", "PIPELINE",
+            "BODY", "INPUT", "OUTPUT", "REQUIRE", "ENSURE",
+            "INVARIANT", "STORE", "MUTABLE", "MATCH", "WHEN",
+            "OTHERWISE", "LOOP", "EMIT", "ASSERT", "RETRY",
+            "ESCALATE", "CHECKPOINT", "RESUME", "HALT",
+            "DELEGATE", "TO", "FORK", "JOIN", "SUCCESS",
+            "FAILURE", "TRUE", "FALSE", "NONE", "AND", "OR",
+            "NOT", "EQ", "NEQ", "GT", "GTE", "LT", "LTE",
+        ];
+
+        /// Strategy for valid type names (uppercase start, not keywords).
+        fn type_name() -> impl Strategy<Value = String> {
+            "[A-Z][a-z][a-zA-Z]{0,6}".prop_filter("not a keyword", |s| {
+                !KEYWORDS.contains(&s.as_str())
+            })
+        }
+
+        proptest! {
+            /// TYPE decls with builtin types always typecheck without errors.
+            #[test]
+            fn typecheck_valid_type_decl(
+                name in type_name(),
+                ty in builtin_type()
+            ) {
+                let source = format!("TYPE {} = {}", name, ty);
+                if let Ok(program) = al_parser::parse(&source) {
+                    let mut checker = TypeChecker::new();
+                    checker.check(&program);
+                    prop_assert!(
+                        !checker.has_errors(),
+                        "Valid TYPE decl should not error: {} (errors: {:?})",
+                        source,
+                        checker.sink.errors()
+                    );
+                }
+            }
+
+            /// Duplicate TYPE declarations always produce DUPLICATE_DEFINITION.
+            #[test]
+            fn typecheck_duplicate_type(
+                name in type_name(),
+                ty1 in builtin_type(),
+                ty2 in builtin_type(),
+            ) {
+                let source = format!("TYPE {} = {}\nTYPE {} = {}", name, ty1, name, ty2);
+                if let Ok(program) = al_parser::parse(&source) {
+                    let mut checker = TypeChecker::new();
+                    checker.check(&program);
+                    prop_assert!(
+                        checker.has_errors(),
+                        "Duplicate TYPE should error: {}",
+                        source
+                    );
+                }
+            }
+
+            /// Undefined type references always produce errors.
+            #[test]
+            fn typecheck_undefined_type(
+                name in type_name(),
+                undef in "[A-Z][a-z]{6,10}", // long enough to not match builtins
+            ) {
+                // Skip if the random name happens to be a builtin
+                if !BUILTIN_TYPES.contains(&undef.as_str()) {
+                    let source = format!("TYPE {} = {}", name, undef);
+                    if let Ok(program) = al_parser::parse(&source) {
+                        let mut checker = TypeChecker::new();
+                        checker.check(&program);
+                        prop_assert!(
+                            checker.has_errors(),
+                            "Undefined type ref should error: {}",
+                            source
+                        );
+                    }
+                }
+            }
+
+            /// OPERATION with valid REQUIRE clause should typecheck.
+            #[test]
+            fn typecheck_require_valid(val in 1i64..1000) {
+                let source = format!(
+                    "OPERATION Test =>\n  INPUT x: Int64\n  REQUIRE x GT {}\n  BODY {{ EMIT x }}",
+                    val
+                );
+                if let Ok(program) = al_parser::parse(&source) {
+                    let mut checker = TypeChecker::new();
+                    checker.check(&program);
+                    prop_assert!(
+                        !checker.has_errors(),
+                        "Valid REQUIRE should not error: {}",
+                        source
+                    );
+                }
+            }
+        }
+    }
 }

@@ -12,3 +12,4 @@ al-vc = { path = "../al-vc" }
 
 [dev-dependencies]
 al-parser = { path = "../al-parser" }
+proptest = { workspace = true }

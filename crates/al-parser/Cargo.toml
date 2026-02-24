@@ -7,3 +7,6 @@ edition.workspace = true
 al-diagnostics = { path = "../al-diagnostics" }
 al-ast = { path = "../al-ast" }
 al-lexer = { path = "../al-lexer" }
+
+[dev-dependencies]
+proptest = { workspace = true }

@@ -2544,4 +2544,115 @@ TYPE Count = Int64
             _ => panic!("expected OperationDecl"),
         }
     }
+
+    // ── Property-based tests ────────────────────────────────────────
+
+    mod proptest_parser {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for valid type names (built-in types).
+        fn builtin_type() -> impl Strategy<Value = &'static str> {
+            prop::sample::select(vec![
+                "Int64", "Float64", "Str", "Bool", "Int", "Float",
+            ])
+        }
+
+        /// Strategy for valid identifiers (lowercase, not keywords).
+        fn ident() -> impl Strategy<Value = String> {
+            "[a-z][a-z0-9]{0,8}".prop_filter("not a keyword", |s| {
+                !matches!(
+                    s.as_str(),
+                    "max" | "strategy" | "to"
+                )
+            })
+        }
+
+        /// All AgentLang keywords to filter from random names.
+        const KEYWORDS: &[&str] = &[
+            "TYPE", "SCHEMA", "AGENT", "OPERATION", "PIPELINE",
+            "BODY", "INPUT", "OUTPUT", "REQUIRE", "ENSURE",
+            "INVARIANT", "STORE", "MUTABLE", "MATCH", "WHEN",
+            "OTHERWISE", "LOOP", "EMIT", "ASSERT", "RETRY",
+            "ESCALATE", "CHECKPOINT", "RESUME", "HALT",
+            "DELEGATE", "TO", "FORK", "JOIN", "SUCCESS",
+            "FAILURE", "TRUE", "FALSE", "NONE", "AND", "OR",
+            "NOT", "EQ", "NEQ", "GT", "GTE", "LT", "LTE",
+        ];
+
+        /// Strategy for valid uppercase names that aren't keywords.
+        fn safe_name() -> impl Strategy<Value = String> {
+            "[A-Z][a-z][a-zA-Z]{0,6}".prop_filter("not a keyword", |s| {
+                !KEYWORDS.contains(&s.as_str())
+            })
+        }
+
+        proptest! {
+            /// TYPE declarations with builtin types always parse.
+            #[test]
+            fn parse_type_decl(
+                name in safe_name(),
+                ty in builtin_type()
+            ) {
+                let source = format!("TYPE {} = {}", name, ty);
+                let result = parse(&source);
+                prop_assert!(result.is_ok(), "TYPE decl should parse: {}", source);
+                let prog = result.unwrap();
+                prop_assert_eq!(prog.declarations.len(), 1);
+            }
+
+            /// SCHEMA declarations with varying field counts always parse.
+            #[test]
+            fn parse_schema_decl(
+                name in safe_name(),
+                field1 in ident(),
+                field2 in ident(),
+            ) {
+                // Ensure unique field names
+                if field1 != field2 {
+                    let source = format!(
+                        "SCHEMA {} => {{ {}: Int64, {}: Str }}",
+                        name, field1, field2
+                    );
+                    let result = parse(&source);
+                    prop_assert!(result.is_ok(), "SCHEMA decl should parse: {}", source);
+                }
+            }
+
+            /// Simple OPERATION declarations always parse.
+            #[test]
+            fn parse_operation_emit(
+                name in safe_name(),
+                val in 0i64..1000,
+            ) {
+                let source = format!("OPERATION {} => BODY {{ EMIT {} }}", name, val);
+                let result = parse(&source);
+                prop_assert!(result.is_ok(), "OPERATION should parse: {}", source);
+            }
+
+            /// PIPELINE declarations always parse with valid stages.
+            #[test]
+            fn parse_pipeline(
+                name in safe_name(),
+                stage1 in ident(),
+                stage2 in ident(),
+            ) {
+                let source = format!("PIPELINE {} => {} -> {}", name, stage1, stage2);
+                let result = parse(&source);
+                prop_assert!(result.is_ok(), "PIPELINE should parse: {}", source);
+            }
+
+            /// Arbitrary printable ASCII never causes a panic in parse.
+            #[test]
+            fn parse_no_panic(source in "[ -~]{0,80}") {
+                let _ = parse(&source);
+            }
+
+            /// parse_recovering never panics on any input.
+            #[test]
+            fn parse_recovering_no_panic(source in "[ -~]{0,80}") {
+                let _ = parse_recovering(&source);
+            }
+        }
+    }
 }
