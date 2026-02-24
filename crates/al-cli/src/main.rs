@@ -1,61 +1,99 @@
 //! AgentLang CLI - MVP v0.1
 //!
-//! Provides a command-line interface for lexing, parsing, and type-checking
-//! AgentLang source files.
+//! Provides a command-line interface for lexing, parsing, type-checking,
+//! and executing AgentLang source files.
+//!
+//! Supports `--format human|json|jsonl` for diagnostic output.
 
+use al_diagnostics::{render_diagnostic, OutputFormat};
 use std::env;
 use std::fs;
 use std::process;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
+/// Parsed CLI arguments.
+struct CliArgs {
+    command: String,
+    file: Option<String>,
+    format: OutputFormat,
+}
 
-    if args.len() < 2 {
+fn parse_args() -> CliArgs {
+    let args: Vec<String> = env::args().collect();
+    let mut format = OutputFormat::Human;
+    let mut positional = Vec::new();
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--format" => {
+                i += 1;
+                if i < args.len() {
+                    format = match args[i].as_str() {
+                        "json" => OutputFormat::Json,
+                        "jsonl" => OutputFormat::Jsonl,
+                        _ => OutputFormat::Human,
+                    };
+                }
+            }
+            _ => positional.push(args[i].clone()),
+        }
+        i += 1;
+    }
+
+    CliArgs {
+        command: positional.first().cloned().unwrap_or_default(),
+        file: positional.get(1).cloned(),
+        format,
+    }
+}
+
+fn main() {
+    let cli = parse_args();
+
+    if cli.command.is_empty() {
         eprintln!("AgentLang CLI v0.1 - MVP");
-        eprintln!("Usage: al-cli <command> [file.al]");
+        eprintln!("Usage: al-cli <command> [file.al] [--format human|json|jsonl]");
         eprintln!();
         eprintln!("Commands:");
         eprintln!("  lex    <file>  Tokenize and print tokens");
         eprintln!("  parse  <file>  Parse and print AST summary");
         eprintln!("  check  <file>  Type-check a source file");
-        eprintln!("  run    <file>  Parse, check, and summarize");
+        eprintln!("  run    <file>  Parse, check, and execute");
         process::exit(1);
     }
 
-    let command = &args[1];
-
-    match command.as_str() {
+    match cli.command.as_str() {
         "lex" => {
-            if args.len() < 3 {
+            let path = cli.file.as_deref().unwrap_or_else(|| {
                 eprintln!("Usage: al-cli lex <file.al>");
                 process::exit(1);
-            }
-            cmd_lex(&args[2]);
+            });
+            cmd_lex(path, cli.format);
         }
         "parse" => {
-            if args.len() < 3 {
+            let path = cli.file.as_deref().unwrap_or_else(|| {
                 eprintln!("Usage: al-cli parse <file.al>");
                 process::exit(1);
-            }
-            cmd_parse(&args[2]);
+            });
+            cmd_parse(path, cli.format);
         }
         "check" => {
-            if args.len() < 3 {
+            let path = cli.file.as_deref().unwrap_or_else(|| {
                 eprintln!("Usage: al-cli check <file.al>");
                 process::exit(1);
-            }
-            cmd_check(&args[2]);
+            });
+            cmd_check(path, cli.format);
         }
         "run" => {
-            if args.len() < 3 {
+            let path = cli.file.as_deref().unwrap_or_else(|| {
                 eprintln!("Usage: al-cli run <file.al>");
                 process::exit(1);
-            }
-            cmd_run(&args[2]);
+            });
+            cmd_run(path, cli.format);
         }
-        _ => {
+        other => {
             // If no command given, treat first arg as a file to run
-            cmd_run(command);
+            cmd_run(other, cli.format);
         }
     }
 }
@@ -70,7 +108,13 @@ fn read_source(path: &str) -> String {
     }
 }
 
-fn cmd_lex(path: &str) {
+fn emit_diagnostics(diags: &[al_diagnostics::Diagnostic], source: &str, format: OutputFormat) {
+    for d in diags {
+        eprintln!("{}", render_diagnostic(d, source, format));
+    }
+}
+
+fn cmd_lex(path: &str, format: OutputFormat) {
     let source = read_source(path);
     match al_lexer::tokenize(&source) {
         Ok(tokens) => {
@@ -80,18 +124,13 @@ fn cmd_lex(path: &str) {
             println!("OK: {} tokens", tokens.len());
         }
         Err(diags) => {
-            for d in &diags {
-                eprintln!(
-                    "error[{}]: {} ({}:{})",
-                    d.code, d.message, d.span.line, d.span.column
-                );
-            }
+            emit_diagnostics(&diags, &source, format);
             process::exit(1);
         }
     }
 }
 
-fn cmd_parse(path: &str) {
+fn cmd_parse(path: &str, format: OutputFormat) {
     let source = read_source(path);
     match al_parser::parse(&source) {
         Ok(program) => {
@@ -125,28 +164,18 @@ fn cmd_parse(path: &str) {
             }
         }
         Err(diags) => {
-            for d in &diags {
-                eprintln!(
-                    "error[{}]: {} ({}:{})",
-                    d.code, d.message, d.span.line, d.span.column
-                );
-            }
+            emit_diagnostics(&diags, &source, format);
             process::exit(1);
         }
     }
 }
 
-fn cmd_check(path: &str) {
+fn cmd_check(path: &str, format: OutputFormat) {
     let source = read_source(path);
     let program = match al_parser::parse(&source) {
         Ok(p) => p,
         Err(diags) => {
-            for d in &diags {
-                eprintln!(
-                    "error[{}]: {} ({}:{})",
-                    d.code, d.message, d.span.line, d.span.column
-                );
-            }
+            emit_diagnostics(&diags, &source, format);
             process::exit(1);
         }
     };
@@ -156,12 +185,8 @@ fn cmd_check(path: &str) {
 
     if checker.has_errors() {
         let diags = checker.take_diagnostics();
-        for d in diags.errors() {
-            eprintln!(
-                "error[{}]: {} ({}:{})",
-                d.code, d.message, d.span.line, d.span.column
-            );
-        }
+        let errors: Vec<_> = diags.errors().into_iter().cloned().collect();
+        emit_diagnostics(&errors, &source, format);
         process::exit(1);
     }
 
@@ -176,19 +201,14 @@ fn cmd_check(path: &str) {
     );
 }
 
-fn cmd_run(path: &str) {
+fn cmd_run(path: &str, format: OutputFormat) {
     let source = read_source(path);
 
     // Phase 1: Lex
     let tokens = match al_lexer::tokenize(&source) {
         Ok(t) => t,
         Err(diags) => {
-            for d in &diags {
-                eprintln!(
-                    "lex error[{}]: {} ({}:{})",
-                    d.code, d.message, d.span.line, d.span.column
-                );
-            }
+            emit_diagnostics(&diags, &source, format);
             process::exit(1);
         }
     };
@@ -198,12 +218,7 @@ fn cmd_run(path: &str) {
     let program = match al_parser::parse(&source) {
         Ok(p) => p,
         Err(diags) => {
-            for d in &diags {
-                eprintln!(
-                    "parse error[{}]: {} ({}:{})",
-                    d.code, d.message, d.span.line, d.span.column
-                );
-            }
+            emit_diagnostics(&diags, &source, format);
             process::exit(1);
         }
     };
@@ -218,12 +233,8 @@ fn cmd_run(path: &str) {
 
     if checker.has_errors() {
         let diags = checker.take_diagnostics();
-        for d in diags.errors() {
-            eprintln!(
-                "type error[{}]: {} ({}:{})",
-                d.code, d.message, d.span.line, d.span.column
-            );
-        }
+        let errors: Vec<_> = diags.errors().into_iter().cloned().collect();
+        emit_diagnostics(&errors, &source, format);
         process::exit(1);
     }
     println!("Phase 3 (check): passed");

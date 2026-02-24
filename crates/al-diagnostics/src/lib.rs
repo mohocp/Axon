@@ -653,6 +653,105 @@ pub enum DiagnosticsError {
 pub type DiagnosticsResult<T> = Result<T, DiagnosticsError>;
 
 // ---------------------------------------------------------------------------
+// 11. Diagnostic rendering (source snippets with carets)
+// ---------------------------------------------------------------------------
+
+/// Output format for diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Human-readable with source snippets and carets.
+    Human,
+    /// One JSON object per diagnostic.
+    Json,
+    /// One JSON object per line (JSONL).
+    Jsonl,
+}
+
+/// Render a diagnostic with source context (snippet + caret).
+///
+/// Example output:
+/// ```text
+/// error[PARSE_ERROR]: unexpected token `;`
+///  --> 3:10
+///   |
+/// 3 | STORE x = ;
+///   |          ^
+///   = note: did you mean `:`?
+/// ```
+pub fn render_diagnostic(diag: &Diagnostic, source: &str, format: OutputFormat) -> String {
+    match format {
+        OutputFormat::Json => serde_json::to_string_pretty(diag).unwrap_or_default(),
+        OutputFormat::Jsonl => serde_json::to_string(diag).unwrap_or_default(),
+        OutputFormat::Human => render_human(diag, source),
+    }
+}
+
+/// Render all diagnostics in a sink.
+pub fn render_diagnostics(sink: &DiagnosticSink, source: &str, format: OutputFormat) -> String {
+    let mut out = String::new();
+    for diag in &sink.diagnostics {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&render_diagnostic(diag, source, format));
+    }
+    out
+}
+
+fn render_human(diag: &Diagnostic, source: &str) -> String {
+    let mut out = String::new();
+
+    // Header: severity[CODE]: message
+    out.push_str(&format!(
+        "{}[{}]: {}\n",
+        diag.severity, diag.code, diag.message
+    ));
+
+    // Location: --> line:column
+    if diag.span.line > 0 {
+        out.push_str(&format!(" --> {}:{}\n", diag.span.line, diag.span.column));
+
+        // Source snippet
+        let lines: Vec<&str> = source.lines().collect();
+        if diag.span.line <= lines.len() {
+            let line_text = lines[diag.span.line - 1];
+            let line_num = diag.span.line;
+            let width = line_num.to_string().len();
+
+            out.push_str(&format!("{:>width$} |\n", "", width = width));
+            out.push_str(&format!("{} | {}\n", line_num, line_text));
+
+            // Caret underline
+            let col = if diag.span.column > 0 {
+                diag.span.column - 1
+            } else {
+                0
+            };
+            let len = if diag.span.length > 0 {
+                diag.span.length
+            } else {
+                1
+            };
+            out.push_str(&format!(
+                "{:>width$} | {:>col$}{}\n",
+                "",
+                "",
+                "^".repeat(len),
+                width = width,
+                col = col
+            ));
+        }
+    }
+
+    // Notes
+    for note in &diag.notes {
+        out.push_str(&format!("  = note: {}\n", note));
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -883,5 +982,181 @@ mod tests {
         let failure = RuntimeFailure::new(ErrorCode::AssertionFailed, "x must be > 0");
         let display = format!("{}", failure);
         assert_eq!(display, "[FAILURE] ASSERTION_FAILED: x must be > 0");
+    }
+
+    // ── Snapshot tests for diagnostic rendering ─────────────────────────
+
+    #[test]
+    fn snapshot_parse_error_with_caret() {
+        let source = "TYPE UserId = Int64\nSTORE x = ;\nTYPE B = Str";
+        let diag = Diagnostic::error(
+            ErrorCode::ParseError,
+            "unexpected token `;`",
+            Span::new(30, 2, 11, 1),
+        )
+        .with_note("expected an expression");
+
+        let rendered = render_diagnostic(&diag, source, OutputFormat::Human);
+        assert!(rendered.contains("error[PARSE_ERROR]: unexpected token `;`"));
+        assert!(rendered.contains(" --> 2:11"));
+        assert!(rendered.contains("STORE x = ;"));
+        assert!(rendered.contains("^"));
+        assert!(rendered.contains("= note: expected an expression"));
+    }
+
+    #[test]
+    fn snapshot_type_mismatch() {
+        let source = "TYPE Foo = NonexistentType";
+        let diag = Diagnostic::error(
+            ErrorCode::UnknownIdentifier,
+            "Undefined type: 'NonexistentType'",
+            Span::new(11, 1, 12, 15),
+        );
+
+        let rendered = render_diagnostic(&diag, source, OutputFormat::Human);
+        assert!(rendered.contains("error[UNKNOWN_IDENTIFIER]"));
+        assert!(rendered.contains("NonexistentType"));
+        assert!(rendered.contains("^^^^^^^^^^^^^^^"));
+    }
+
+    #[test]
+    fn snapshot_duplicate_definition() {
+        let source = "TYPE Foo = Int64\nTYPE Foo = Str";
+        let diag = Diagnostic::error(
+            ErrorCode::DuplicateDefinition,
+            "Duplicate type definition: 'Foo'",
+            Span::new(22, 2, 6, 3),
+        );
+
+        let rendered = render_diagnostic(&diag, source, OutputFormat::Human);
+        assert!(rendered.contains("error[DUPLICATE_DEFINITION]"));
+        assert!(rendered.contains("Duplicate type definition"));
+        assert!(rendered.contains("^^^"));
+    }
+
+    #[test]
+    fn snapshot_capability_denied() {
+        let source = "OPERATION Op =>\n  BODY {\n    DELEGATE TO unknown_agent: task()\n  }";
+        let diag = Diagnostic::error(
+            ErrorCode::CapabilityDenied,
+            "DELEGATE statement is not permitted: no AGENT declares DELEGATE capability",
+            Span::new(27, 3, 5, 8),
+        );
+
+        let rendered = render_diagnostic(&diag, source, OutputFormat::Human);
+        assert!(rendered.contains("error[CAPABILITY_DENIED]"));
+        assert!(rendered.contains("DELEGATE"));
+    }
+
+    #[test]
+    fn snapshot_warning_cap_alias() {
+        let source = "AGENT Worker =>\n  CAPABILITIES [net]";
+        let diag = Diagnostic::warning(
+            WarningCode::CapAliasDeprecated,
+            "deprecated capability alias 'net', use 'NETWORK' instead",
+            Span::new(32, 2, 18, 3),
+        );
+
+        let rendered = render_diagnostic(&diag, source, OutputFormat::Human);
+        assert!(rendered.contains("warning[CAP_ALIAS_DEPRECATED]"));
+        assert!(rendered.contains("net"));
+    }
+
+    #[test]
+    fn snapshot_json_output() {
+        let diag = Diagnostic::error(
+            ErrorCode::ParseError,
+            "unexpected token",
+            Span::new(0, 1, 1, 5),
+        );
+
+        let json = render_diagnostic(&diag, "", OutputFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["code"], "PARSE_ERROR");
+        assert_eq!(parsed["severity"], "error");
+    }
+
+    #[test]
+    fn snapshot_jsonl_output() {
+        let diag = Diagnostic::error(
+            ErrorCode::TypeMismatch,
+            "type mismatch",
+            Span::new(0, 1, 1, 4),
+        );
+
+        let jsonl = render_diagnostic(&diag, "", OutputFormat::Jsonl);
+        assert!(!jsonl.contains('\n'), "JSONL should be single line");
+        let parsed: serde_json::Value = serde_json::from_str(&jsonl).unwrap();
+        assert_eq!(parsed["code"], "TYPE_MISMATCH");
+    }
+
+    #[test]
+    fn snapshot_all_error_codes_render() {
+        // Ensure every error code can be rendered without panicking
+        let codes = [
+            ErrorCode::NotImplemented,
+            ErrorCode::TypeMismatch,
+            ErrorCode::FailureArityMismatch,
+            ErrorCode::CapabilityDenied,
+            ErrorCode::VcInvalid,
+            ErrorCode::AssertionFailed,
+            ErrorCode::CheckpointInvalid,
+            ErrorCode::Escalated,
+            ErrorCode::ParseError,
+            ErrorCode::UnknownIdentifier,
+            ErrorCode::DuplicateDefinition,
+        ];
+
+        let source = "TYPE Foo = Int64";
+        for code in codes {
+            let diag = Diagnostic::error(code, format!("test {}", code), Span::new(0, 1, 1, 4));
+            let rendered = render_diagnostic(&diag, source, OutputFormat::Human);
+            assert!(rendered.contains(&code.to_string()));
+
+            let json = render_diagnostic(&diag, source, OutputFormat::Json);
+            let _: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+            let jsonl = render_diagnostic(&diag, source, OutputFormat::Jsonl);
+            let _: serde_json::Value = serde_json::from_str(&jsonl).unwrap();
+        }
+    }
+
+    #[test]
+    fn snapshot_all_warning_codes_render() {
+        let codes = [
+            WarningCode::CapAliasDeprecated,
+            WarningCode::UnresolvedReference,
+        ];
+
+        let source = "PIPELINE Flow => a -> b";
+        for code in codes {
+            let diag = Diagnostic::warning(code, format!("test {}", code), Span::new(0, 1, 1, 8));
+            let rendered = render_diagnostic(&diag, source, OutputFormat::Human);
+            assert!(rendered.contains(&code.to_string()));
+        }
+    }
+
+    #[test]
+    fn snapshot_render_diagnostics_multiple() {
+        let source = "TYPE Foo = Int64\nTYPE Foo = Str";
+        let mut sink = DiagnosticSink::new();
+        sink.error(
+            ErrorCode::DuplicateDefinition,
+            "Duplicate type",
+            Span::new(22, 2, 6, 3),
+        );
+        sink.warning(
+            WarningCode::UnresolvedReference,
+            "unresolved ref",
+            Span::new(0, 1, 1, 4),
+        );
+
+        let rendered = render_diagnostics(&sink, source, OutputFormat::Human);
+        assert!(rendered.contains("error[DUPLICATE_DEFINITION]"));
+        assert!(rendered.contains("warning[UNRESOLVED_REFERENCE]"));
+
+        let jsonl = render_diagnostics(&sink, source, OutputFormat::Jsonl);
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines.len(), 2, "JSONL should have 2 lines");
     }
 }
