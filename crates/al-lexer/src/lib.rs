@@ -454,7 +454,7 @@ impl<'src> Lexer<'src> {
         }
 
         // -- Confidence literal: ~DIGIT... ----------------------------------------
-        if ch == b'~' && self.peek_ahead(1).map_or(false, |c| c.is_ascii_digit()) {
+        if ch == b'~' && self.peek_ahead(1).is_some_and(|c| c.is_ascii_digit()) {
             self.scan_confidence();
             return;
         }
@@ -673,9 +673,7 @@ impl<'src> Lexer<'src> {
         let mut is_float = false;
 
         // Check for fractional part: '.' followed by digit (not '..' range operator)
-        if self.peek() == Some(b'.')
-            && self.peek_ahead(1).map_or(false, |c| c.is_ascii_digit())
-        {
+        if self.peek() == Some(b'.') && self.peek_ahead(1).is_some_and(|c| c.is_ascii_digit()) {
             is_float = true;
             self.advance(); // consume '.'
             while let Some(ch) = self.peek() {
@@ -763,7 +761,7 @@ impl<'src> Lexer<'src> {
                     // "m" — minutes (only if next char is NOT alphanumeric/underscore)
                     if self
                         .peek()
-                        .map_or(true, |c| !c.is_ascii_alphanumeric() && c != b'_')
+                        .is_none_or(|c| !c.is_ascii_alphanumeric() && c != b'_')
                     {
                         let text =
                             std::str::from_utf8(&self.source[start_offset..self.pos]).unwrap();
@@ -779,7 +777,7 @@ impl<'src> Lexer<'src> {
                     self.advance();
                     if self
                         .peek()
-                        .map_or(true, |c| !c.is_ascii_alphanumeric() && c != b'_')
+                        .is_none_or(|c| !c.is_ascii_alphanumeric() && c != b'_')
                     {
                         let text =
                             std::str::from_utf8(&self.source[start_offset..self.pos]).unwrap();
@@ -794,7 +792,7 @@ impl<'src> Lexer<'src> {
                     self.advance();
                     if self
                         .peek()
-                        .map_or(true, |c| !c.is_ascii_alphanumeric() && c != b'_')
+                        .is_none_or(|c| !c.is_ascii_alphanumeric() && c != b'_')
                     {
                         let text =
                             std::str::from_utf8(&self.source[start_offset..self.pos]).unwrap();
@@ -933,9 +931,12 @@ impl<'src> Lexer<'src> {
         // Pattern: uppercase letters mixed with digits, then ':' then hex/alphanumeric
         if self.peek() == Some(b':') && self.is_hash_prefix(word) {
             // Peek ahead past ':' to see if there are hex/alphanumeric chars
-            if self.peek_ahead(1).map_or(false, |c| c.is_ascii_alphanumeric()) {
+            if self
+                .peek_ahead(1)
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+            {
                 self.advance(); // consume ':'
-                // Consume hex/alphanumeric chars for the hash value
+                                // Consume hex/alphanumeric chars for the hash value
                 while let Some(ch) = self.peek() {
                     if ch.is_ascii_alphanumeric() {
                         self.advance();
@@ -1157,7 +1158,7 @@ impl<'src> Lexer<'src> {
             } else {
                 // Rule 4: suppress NEWLINE *before* tokens that continue an expression.
                 if suppresses_newline_before(&spanned.token) {
-                    while filtered.last().map_or(false, |t| t.token == Token::Newline) {
+                    while filtered.last().is_some_and(|t| t.token == Token::Newline) {
                         filtered.pop();
                     }
                 }
@@ -1424,7 +1425,9 @@ mod tests {
 
     #[test]
     fn float_simple() {
-        assert_eq!(tok("3.14"), vec![Token::Float(3.14)]);
+        #[allow(clippy::approx_constant)]
+        let expected = vec![Token::Float(3.14)];
+        assert_eq!(tok("3.14"), expected);
         assert_eq!(tok("0.5"), vec![Token::Float(0.5)]);
     }
 
@@ -1574,11 +1577,7 @@ mod tests {
         let tokens = tok("(\na\n)");
         assert_eq!(
             tokens,
-            vec![
-                Token::LParen,
-                Token::Identifier("a".into()),
-                Token::RParen,
-            ]
+            vec![Token::LParen, Token::Identifier("a".into()), Token::RParen,]
         );
     }
 
@@ -1602,11 +1601,7 @@ mod tests {
         let tokens = tok("{\na\n}");
         assert_eq!(
             tokens,
-            vec![
-                Token::LBrace,
-                Token::Identifier("a".into()),
-                Token::RBrace,
-            ]
+            vec![Token::LBrace, Token::Identifier("a".into()), Token::RBrace,]
         );
     }
 
@@ -1832,30 +1827,20 @@ mod tests {
         let tokens = tok("(\na\n)");
         assert_eq!(
             tokens,
-            vec![
-                Token::LParen,
-                Token::Identifier("a".into()),
-                Token::RParen,
-            ]
+            vec![Token::LParen, Token::Identifier("a".into()), Token::RParen,]
         );
     }
 
     #[test]
     fn newline_suppressed_before_rbracket() {
         let tokens = tok("a\n]");
-        assert_eq!(
-            tokens,
-            vec![Token::Identifier("a".into()), Token::RBracket]
-        );
+        assert_eq!(tokens, vec![Token::Identifier("a".into()), Token::RBracket]);
     }
 
     #[test]
     fn newline_suppressed_before_rbrace() {
         let tokens = tok("a\n}");
-        assert_eq!(
-            tokens,
-            vec![Token::Identifier("a".into()), Token::RBrace]
-        );
+        assert_eq!(tokens, vec![Token::Identifier("a".into()), Token::RBrace]);
     }
 
     // ── NEWLINE emitted between normal tokens ─────────────────────────

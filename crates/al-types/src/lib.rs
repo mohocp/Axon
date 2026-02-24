@@ -14,12 +14,27 @@ pub const MVP_PROFILE: &str = "mvp-0.1";
 
 /// Built-in type names that are always available without explicit definition.
 const BUILTIN_TYPES: &[&str] = &[
-    "Int64", "Float64", "Str", "Bool",
-    "List", "Map", "Set",
-    "Result", "Option",
-    "Duration", "Size", "Confidence", "Hash",
-    "Record", "Any", "Unit", "Void",
-    "Int", "Float", "String", "Bytes",
+    "Int64",
+    "Float64",
+    "Str",
+    "Bool",
+    "List",
+    "Map",
+    "Set",
+    "Result",
+    "Option",
+    "Duration",
+    "Size",
+    "Confidence",
+    "Hash",
+    "Record",
+    "Any",
+    "Unit",
+    "Void",
+    "Int",
+    "Float",
+    "String",
+    "Bytes",
 ];
 
 /// Type environment for a compilation unit.
@@ -153,9 +168,7 @@ impl TypeChecker {
                     } else {
                         let field_info: Vec<(String, String)> = fields
                             .iter()
-                            .map(|f| {
-                                (f.node.name.node.clone(), format!("{:?}", f.node.ty.node))
-                            })
+                            .map(|f| (f.node.name.node.clone(), format!("{:?}", f.node.ty.node)))
                             .collect();
                         self.env.schemas.insert(
                             name.node.clone(),
@@ -262,10 +275,7 @@ impl TypeChecker {
         } = stmt
         {
             for arm in arms {
-                self.check_failure_arity_in_pattern(
-                    &arm.node.pattern.node,
-                    &arm.node.pattern.span,
-                );
+                self.check_failure_arity_in_pattern(&arm.node.pattern.node, &arm.node.pattern.span);
                 if let MatchBody::Block(block) = &arm.node.body.node {
                     for s in &block.node.stmts {
                         self.check_failure_arity_in_stmt(&s.node);
@@ -331,9 +341,7 @@ impl TypeChecker {
                         self.check_type_expr(&field.node.ty, &empty);
                     }
                 }
-                Declaration::OperationDecl {
-                    inputs, output, ..
-                } => {
+                Declaration::OperationDecl { inputs, output, .. } => {
                     let empty = HashSet::new();
                     for input in inputs {
                         self.check_type_expr(&input.node.ty, &empty);
@@ -348,11 +356,7 @@ impl TypeChecker {
     }
 
     /// Recursively check a type expression for undefined type references.
-    fn check_type_expr(
-        &mut self,
-        ty: &al_ast::Spanned<TypeExpr>,
-        type_params: &HashSet<String>,
-    ) {
+    fn check_type_expr(&mut self, ty: &al_ast::Spanned<TypeExpr>, type_params: &HashSet<String>) {
         match &ty.node {
             TypeExpr::Named { name, params } => {
                 if !type_params.contains(&name.node) && !self.is_type_defined(&name.node) {
@@ -389,7 +393,10 @@ impl TypeChecker {
     fn check_require_clauses(&mut self, program: &al_ast::Program) {
         for decl in &program.declarations {
             if let Declaration::OperationDecl {
-                requires, inputs, body, ..
+                requires,
+                inputs,
+                body,
+                ..
             } = &decl.node
             {
                 let mut known_names: HashSet<String> =
@@ -412,7 +419,11 @@ impl TypeChecker {
         }
     }
 
-    fn collect_store_bindings_from_stmt(&self, stmt: &Statement, known_names: &mut HashSet<String>) {
+    fn collect_store_bindings_from_stmt(
+        &self,
+        stmt: &Statement,
+        known_names: &mut HashSet<String>,
+    ) {
         match stmt {
             Statement::Store { name, .. } => {
                 known_names.insert(name.node.clone());
@@ -439,11 +450,7 @@ impl TypeChecker {
     }
 
     /// Walk a REQUIRE expression and verify identifiers are in scope.
-    fn check_require_expr(
-        &mut self,
-        expr: &al_ast::Spanned<Expr>,
-        known_names: &HashSet<String>,
-    ) {
+    fn check_require_expr(&mut self, expr: &al_ast::Spanned<Expr>, known_names: &HashSet<String>) {
         match &expr.node {
             Expr::Identifier(name) => {
                 // Only flag top-level identifiers that are not inputs.
@@ -730,7 +737,9 @@ impl TypeChecker {
             Statement::Expr { expr } => {
                 self.check_pipeline_types_in_expr(&expr.node, op_name);
             }
-            Statement::Match { arms, otherwise, .. } => {
+            Statement::Match {
+                arms, otherwise, ..
+            } => {
                 for arm in arms {
                     match &arm.node.body.node {
                         MatchBody::Block(block) => {
@@ -881,7 +890,13 @@ impl TypeChecker {
             TypeExpr::Record { fields } => {
                 let fields = fields
                     .iter()
-                    .map(|f| format!("{}: {}", f.node.name.node, Self::format_type_expr(&f.node.ty.node)))
+                    .map(|f| {
+                        format!(
+                            "{}: {}",
+                            f.node.name.node,
+                            Self::format_type_expr(&f.node.ty.node)
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{{}}}", fields)
@@ -1354,7 +1369,10 @@ OPERATION Verify =>
         let mut checker = TypeChecker::new();
         checker.check(&program);
         assert_eq!(checker.vc_results.len(), 3);
-        assert!(checker.vc_results.iter().all(|vc| vc.vc_id.starts_with("vc_")));
+        assert!(checker
+            .vc_results
+            .iter()
+            .all(|vc| vc.vc_id.starts_with("vc_")));
     }
 
     #[test]
@@ -1392,11 +1410,16 @@ OPERATION Verify =>
         checker.check(&program);
         assert!(!checker.has_errors());
         assert_eq!(checker.synthetic_asserts.len(), 1);
-        let hir = checker.hir_after_vc.as_ref().expect("hir should be captured");
+        let hir = checker
+            .hir_after_vc
+            .as_ref()
+            .expect("hir should be captured");
         let op = hir
             .declarations
             .iter()
-            .find(|d| matches!(d, al_hir::HirDeclaration::Operation { name, .. } if name == "Verify"))
+            .find(
+                |d| matches!(d, al_hir::HirDeclaration::Operation { name, .. } if name == "Verify"),
+            )
             .expect("operation exists");
         if let al_hir::HirDeclaration::Operation { body, .. } = op {
             assert!(matches!(
@@ -1423,9 +1446,11 @@ OPERATION Verify =>
         });
         checker.check(&program);
         assert!(checker.has_errors());
-        assert!(checker.sink.errors().iter().any(|e| {
-            e.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::VcInvalid)
-        }));
+        assert!(checker
+            .sink
+            .errors()
+            .iter()
+            .any(|e| { e.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::VcInvalid) }));
     }
 
     #[test]
@@ -1466,7 +1491,8 @@ OPERATION Route =>
         checker.check(&program);
         assert!(checker.sink.errors().iter().any(|e| {
             e.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::UnknownIdentifier)
-                && e.message.contains("Unknown delegate target agent 'MissingWorker'")
+                && e.message
+                    .contains("Unknown delegate target agent 'MissingWorker'")
         }));
     }
 
@@ -1488,11 +1514,16 @@ OPERATION Route =>
         let program = al_parser::parse(source).unwrap();
         let mut checker = TypeChecker::new();
         checker.check(&program);
-        let hir = checker.hir_after_vc.as_ref().expect("hir should be captured");
+        let hir = checker
+            .hir_after_vc
+            .as_ref()
+            .expect("hir should be captured");
         let op = hir
             .declarations
             .iter()
-            .find(|d| matches!(d, al_hir::HirDeclaration::Operation { name, .. } if name == "Route"))
+            .find(
+                |d| matches!(d, al_hir::HirDeclaration::Operation { name, .. } if name == "Route"),
+            )
             .expect("operation exists");
         if let al_hir::HirDeclaration::Operation { body, meta, .. } = op {
             assert_eq!(meta.required_caps, vec!["DELEGATE".to_string()]);

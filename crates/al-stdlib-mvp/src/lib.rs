@@ -56,7 +56,7 @@ pub fn mvp_ops(module: &str) -> Option<&'static [&'static str]> {
 
 /// Whether a specific operation is included in MVP for a given module.
 pub fn is_mvp_op(module: &str, op: &str) -> bool {
-    mvp_ops(module).map_or(false, |ops| ops.contains(&op))
+    mvp_ops(module).is_some_and(|ops| ops.contains(&op))
 }
 
 /// Whether a module's operations are fallible (return Result[T]).
@@ -111,16 +111,11 @@ pub struct SignaturesFile {
 /// Names of all stdlib operations that have runtime implementations.
 pub const IMPLEMENTED_STDLIB_OPS: &[&str] = &[
     // core.data
-    "FILTER", "MAP", "REDUCE", "SORT", "GROUP", "TAKE", "SKIP",
-    // core.io
-    "READ", "WRITE",
-    // core.text
-    "PARSE", "FORMAT", "REGEX", "TOKENIZE",
-    // core.http
-    "GET", "POST",
-    // agent.llm
-    "GENERATE", "CLASSIFY", "EXTRACT",
-    // agent.memory
+    "FILTER", "MAP", "REDUCE", "SORT", "GROUP", "TAKE", "SKIP", // core.io
+    "READ", "WRITE", // core.text
+    "PARSE", "FORMAT", "REGEX", "TOKENIZE", // core.http
+    "GET", "POST", // agent.llm
+    "GENERATE", "CLASSIFY", "EXTRACT", // agent.memory
     "REMEMBER", "RECALL", "FORGET",
 ];
 
@@ -210,14 +205,30 @@ mod tests {
     fn signatures_lock_module_assignment() {
         let sigs = load_signatures();
         let expected_modules: std::collections::HashMap<&str, &str> = [
-            ("FILTER", "core.data"), ("MAP", "core.data"), ("REDUCE", "core.data"),
-            ("SORT", "core.data"), ("GROUP", "core.data"), ("TAKE", "core.data"), ("SKIP", "core.data"),
-            ("READ", "core.io"), ("WRITE", "core.io"),
-            ("PARSE", "core.text"), ("FORMAT", "core.text"), ("REGEX", "core.text"), ("TOKENIZE", "core.text"),
-            ("GET", "core.http"), ("POST", "core.http"),
-            ("GENERATE", "agent.llm"), ("CLASSIFY", "agent.llm"), ("EXTRACT", "agent.llm"),
-            ("REMEMBER", "agent.memory"), ("RECALL", "agent.memory"), ("FORGET", "agent.memory"),
-        ].into_iter().collect();
+            ("FILTER", "core.data"),
+            ("MAP", "core.data"),
+            ("REDUCE", "core.data"),
+            ("SORT", "core.data"),
+            ("GROUP", "core.data"),
+            ("TAKE", "core.data"),
+            ("SKIP", "core.data"),
+            ("READ", "core.io"),
+            ("WRITE", "core.io"),
+            ("PARSE", "core.text"),
+            ("FORMAT", "core.text"),
+            ("REGEX", "core.text"),
+            ("TOKENIZE", "core.text"),
+            ("GET", "core.http"),
+            ("POST", "core.http"),
+            ("GENERATE", "agent.llm"),
+            ("CLASSIFY", "agent.llm"),
+            ("EXTRACT", "agent.llm"),
+            ("REMEMBER", "agent.memory"),
+            ("RECALL", "agent.memory"),
+            ("FORGET", "agent.memory"),
+        ]
+        .into_iter()
+        .collect();
 
         for (name, sig) in &sigs.operations {
             if let Some(expected) = expected_modules.get(name.as_str()) {
@@ -247,7 +258,13 @@ mod tests {
     #[test]
     fn signatures_lock_fallible_modules() {
         let sigs = load_signatures();
-        let fallible_modules = ["core.io", "core.text", "core.http", "agent.llm", "agent.memory"];
+        let fallible_modules = [
+            "core.io",
+            "core.text",
+            "core.http",
+            "agent.llm",
+            "agent.memory",
+        ];
         for (name, sig) in &sigs.operations {
             if fallible_modules.contains(&sig.module.as_str()) {
                 assert!(
@@ -314,7 +331,10 @@ mod tests {
     #[test]
     fn signatures_lock_memory_ops_shape() {
         let sigs = load_signatures();
-        let remember = sigs.operations.get("REMEMBER").expect("REMEMBER must exist");
+        let remember = sigs
+            .operations
+            .get("REMEMBER")
+            .expect("REMEMBER must exist");
         assert_eq!(remember.inputs.len(), 2);
         assert_eq!(remember.module, "agent.memory");
 
@@ -333,14 +353,16 @@ mod tests {
             assert!(
                 is_mvp_module(&sig.module),
                 "op {} has module '{}' which is not an MVP module",
-                name, sig.module
+                name,
+                sig.module
             );
             // And must appear in that module's op list.
             let module_ops = mvp_ops(&sig.module).unwrap();
             assert!(
                 module_ops.contains(&name.as_str()),
                 "op {} not in {} registry",
-                name, sig.module
+                name,
+                sig.module
             );
         }
         // Every implemented op must be in the signatures file.

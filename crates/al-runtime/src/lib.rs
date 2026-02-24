@@ -24,11 +24,9 @@ pub mod interpreter;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-use al_capabilities::{Capability, CapabilitySet, check_capability as cap_check};
+use al_capabilities::{check_capability as cap_check, Capability, CapabilitySet};
 use al_checkpoint::{Checkpoint, CheckpointMeta, CheckpointStore, EffectJournal};
-use al_diagnostics::{
-    AuditEvent, AuditEventType, ErrorCode, RuntimeFailure, MVP_PROFILE,
-};
+use al_diagnostics::{AuditEvent, AuditEventType, ErrorCode, RuntimeFailure, MVP_PROFILE};
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -229,9 +227,7 @@ impl std::fmt::Display for Value {
                 write!(f, "}}")
             }
             Value::Success(inner) => write!(f, "SUCCESS({})", inner),
-            Value::Failure {
-                code, message, ..
-            } => write!(f, "FAILURE({}, {})", code, message),
+            Value::Failure { code, message, .. } => write!(f, "FAILURE({}, {})", code, message),
             Value::AgentId(id) => write!(f, "AgentId({})", id),
             Value::TaskId(id) => write!(f, "TaskId({})", id),
         }
@@ -401,7 +397,6 @@ impl AgentState {
 /// together with agent management, audit logging, and checkpoint support.
 pub struct Runtime {
     // -- Formal semantics state -----------------------------------------------
-
     /// **H** — Heap: values addressable by numeric address.
     pub heap: HashMap<u64, Value>,
     /// Next heap address to allocate.
@@ -423,12 +418,10 @@ pub struct Runtime {
     pub locks: HashSet<String>,
 
     // -- Agent management -----------------------------------------------------
-
     /// All registered agents, keyed by agent ID.
     pub agents: HashMap<String, AgentState>,
 
     // -- Audit & diagnostics --------------------------------------------------
-
     /// Append-only audit log (JSONL events).
     pub audit_log: Vec<AuditEvent>,
 
@@ -437,7 +430,6 @@ pub struct Runtime {
     pub current_task_id: String,
 
     // -- Checkpoint -----------------------------------------------------------
-
     /// In-memory checkpoint store.
     pub checkpoint_store: CheckpointStore,
 
@@ -445,7 +437,6 @@ pub struct Runtime {
     pub effect_journal: EffectJournal,
 
     // -- Capability registry (global overrides) --------------------------------
-
     /// Per-agent capability overrides. If an agent appears here, these
     /// capabilities are used *instead of* the agent's own `AgentState.capabilities`.
     /// This allows the runtime to dynamically grant/revoke capabilities.
@@ -622,12 +613,7 @@ impl Runtime {
         event_type: AuditEventType,
         details: serde_json::Value,
     ) {
-        let event = AuditEvent::with_details(
-            agent_id,
-            &self.current_task_id,
-            event_type,
-            details,
-        );
+        let event = AuditEvent::with_details(agent_id, &self.current_task_id, event_type, details);
         self.audit_log.push(event);
     }
 
@@ -702,14 +688,8 @@ impl Runtime {
     /// Emits an `ESCALATED` audit event and returns a `RuntimeFailure` with
     /// the `Escalated` error code. The optional `message` provides additional
     /// context; if `None`, a default message is used.
-    pub fn execute_escalate(
-        &mut self,
-        message: Option<String>,
-        agent_id: &str,
-    ) -> RuntimeFailure {
-        let msg = message.unwrap_or_else(|| {
-            format!("agent '{}' escalated", agent_id)
-        });
+    pub fn execute_escalate(&mut self, message: Option<String>, agent_id: &str) -> RuntimeFailure {
+        let msg = message.unwrap_or_else(|| format!("agent '{}' escalated", agent_id));
 
         self.emit_audit(
             agent_id,
@@ -830,20 +810,15 @@ impl Runtime {
     ///
     /// Validates the checkpoint profile and hash integrity, then emits a
     /// `CHECKPOINT_RESTORED` audit event.
-    pub fn restore_checkpoint(
-        &mut self,
-        checkpoint_id: &str,
-    ) -> Result<Value, RuntimeFailure> {
+    pub fn restore_checkpoint(&mut self, checkpoint_id: &str) -> Result<Value, RuntimeFailure> {
         // Validate profile.
-        self.checkpoint_store
-            .validate(checkpoint_id, MVP_PROFILE)?;
+        self.checkpoint_store.validate(checkpoint_id, MVP_PROFILE)?;
 
         // Restore the checkpoint.
         let checkpoint = self.checkpoint_store.restore(checkpoint_id)?;
 
         // Validate hash integrity.
-        let state_str =
-            serde_json::to_string(&checkpoint.state).unwrap_or_default();
+        let state_str = serde_json::to_string(&checkpoint.state).unwrap_or_default();
         let computed_hash = simple_hash(&state_str);
         if computed_hash != checkpoint.meta.hash {
             return Err(RuntimeFailure::with_details(
@@ -913,7 +888,10 @@ impl Runtime {
 
         Err(RuntimeFailure::with_details(
             ErrorCode::AssertionFailed,
-            format!("assertion failed: vc_id={}, reason={}", vc_id, solver_reason),
+            format!(
+                "assertion failed: vc_id={}, reason={}",
+                vc_id, solver_reason
+            ),
             serde_json::json!({
                 "vc_id": vc_id,
                 "solver_reason": solver_reason,
@@ -953,10 +931,7 @@ impl Runtime {
     /// fails, execution halts immediately and the failure propagates.
     ///
     /// Returns a vector of `Value` results, one per branch, in order.
-    pub fn execute_fork_join<F>(
-        &mut self,
-        branches: Vec<F>,
-    ) -> Result<Vec<Value>, RuntimeFailure>
+    pub fn execute_fork_join<F>(&mut self, branches: Vec<F>) -> Result<Vec<Value>, RuntimeFailure>
     where
         F: FnOnce(&mut Self) -> Result<Value, RuntimeFailure>,
     {
@@ -1112,7 +1087,11 @@ impl Runtime {
 
         // Parse registers from state
         let mut registers = HashMap::new();
-        if let Some(regs) = checkpoint.state.get("registers").and_then(|v| v.as_object()) {
+        if let Some(regs) = checkpoint
+            .state
+            .get("registers")
+            .and_then(|v| v.as_object())
+        {
             for (k, v) in regs {
                 registers.insert(k.clone(), Value::from_json(v));
             }
@@ -1164,6 +1143,7 @@ fn simple_hash(data: &str) -> String {
 // ===========================================================================
 
 #[cfg(test)]
+#[allow(clippy::approx_constant, clippy::type_complexity)]
 mod tests {
     use super::*;
     use al_capabilities::Capability;
@@ -1374,10 +1354,7 @@ mod tests {
         rt.register_agent("agent-1", CapabilitySet::empty());
         rt.get_agent_mut("agent-1").unwrap().mark_ready();
 
-        let failure = rt.execute_escalate(
-            Some("something went wrong".into()),
-            "agent-1",
-        );
+        let failure = rt.execute_escalate(Some("something went wrong".into()), "agent-1");
 
         // Verify the failure.
         assert_eq!(failure.code, ErrorCode::Escalated);
@@ -1390,10 +1367,7 @@ mod tests {
         assert_eq!(rt.audit_log[0].details["message"], "something went wrong");
 
         // Verify the agent was marked as failed.
-        assert_eq!(
-            rt.get_agent("agent-1").unwrap().status,
-            AgentStatus::Failed
-        );
+        assert_eq!(rt.get_agent("agent-1").unwrap().status, AgentStatus::Failed);
     }
 
     #[test]
@@ -1439,10 +1413,7 @@ mod tests {
 
         // Verify audit event.
         assert_eq!(rt.audit_log.len(), 1);
-        assert_eq!(
-            rt.audit_log[0].event_type,
-            AuditEventType::CapabilityDenied
-        );
+        assert_eq!(rt.audit_log[0].event_type, AuditEventType::CapabilityDenied);
         assert_eq!(rt.audit_log[0].details["required"], "DB_WRITE");
     }
 
@@ -1459,9 +1430,7 @@ mod tests {
             .insert("agent-1".to_string(), override_caps);
 
         // Check should succeed via override.
-        assert!(rt
-            .check_capability("agent-1", Capability::LlmInfer)
-            .is_ok());
+        assert!(rt.check_capability("agent-1", Capability::LlmInfer).is_ok());
     }
 
     #[test]
@@ -1654,8 +1623,7 @@ mod tests {
     #[test]
     fn fork_join_empty_branches_returns_empty() {
         let mut rt = Runtime::new();
-        let branches: Vec<Box<dyn FnOnce(&mut Runtime) -> Result<Value, RuntimeFailure>>> =
-            vec![];
+        let branches: Vec<Box<dyn FnOnce(&mut Runtime) -> Result<Value, RuntimeFailure>>> = vec![];
         let results = rt.execute_fork_join(branches).unwrap();
         assert!(results.is_empty());
     }
@@ -1719,17 +1687,12 @@ mod tests {
         assert!(retry_result.is_err());
 
         // Escalate after retry exhaustion.
-        let failure = rt.execute_escalate(
-            Some("all retries exhausted, escalating".into()),
-            "agent-1",
-        );
+        let failure =
+            rt.execute_escalate(Some("all retries exhausted, escalating".into()), "agent-1");
         assert_eq!(failure.code, ErrorCode::Escalated);
 
         // Verify agent is failed.
-        assert_eq!(
-            rt.get_agent("agent-1").unwrap().status,
-            AgentStatus::Failed
-        );
+        assert_eq!(rt.get_agent("agent-1").unwrap().status, AgentStatus::Failed);
 
         // Verify audit log has the escalation event.
         assert_eq!(rt.audit_log.len(), 1);
@@ -1750,18 +1713,13 @@ mod tests {
         assert!(cap_result.is_err());
 
         // Escalate.
-        let failure = rt.execute_escalate(
-            Some("required DB_WRITE not available".into()),
-            "agent-1",
-        );
+        let failure =
+            rt.execute_escalate(Some("required DB_WRITE not available".into()), "agent-1");
         assert_eq!(failure.code, ErrorCode::Escalated);
 
         // Audit log: CAPABILITY_DENIED + ESCALATED.
         assert_eq!(rt.audit_log.len(), 2);
-        assert_eq!(
-            rt.audit_log[0].event_type,
-            AuditEventType::CapabilityDenied
-        );
+        assert_eq!(rt.audit_log[0].event_type, AuditEventType::CapabilityDenied);
         assert_eq!(rt.audit_log[1].event_type, AuditEventType::Escalated);
     }
 }

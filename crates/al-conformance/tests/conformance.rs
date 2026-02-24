@@ -3,6 +3,8 @@
 //! These tests validate the implementation against the specification
 //! requirements identified as C1-C10.
 
+#![allow(clippy::type_complexity)]
+
 use al_conformance::*;
 use std::collections::BTreeMap;
 
@@ -81,7 +83,10 @@ fn c2_failure_arity_3_fields() {
             // Second arm should be a FAILURE pattern
             let failure_arm = &arms[1];
             assert!(
-                matches!(failure_arm.node.pattern.node, al_ast::Pattern::Failure { .. }),
+                matches!(
+                    failure_arm.node.pattern.node,
+                    al_ast::Pattern::Failure { .. }
+                ),
                 "C2: second match arm should be a FAILURE pattern"
             );
         } else {
@@ -106,15 +111,15 @@ fn c3_capability_deny() {
         assert_eq!(name.node, "SecureWorker");
 
         // Should have CAPABILITIES, DENY, TRUST_LEVEL
-        let has_caps = properties.iter().any(|p| {
-            matches!(p.node, al_ast::AgentProperty::Capabilities(_))
-        });
-        let has_deny = properties.iter().any(|p| {
-            matches!(p.node, al_ast::AgentProperty::Deny(_))
-        });
-        let has_trust = properties.iter().any(|p| {
-            matches!(p.node, al_ast::AgentProperty::TrustLevel(_))
-        });
+        let has_caps = properties
+            .iter()
+            .any(|p| matches!(p.node, al_ast::AgentProperty::Capabilities(_)));
+        let has_deny = properties
+            .iter()
+            .any(|p| matches!(p.node, al_ast::AgentProperty::Deny(_)));
+        let has_trust = properties
+            .iter()
+            .any(|p| matches!(p.node, al_ast::AgentProperty::TrustLevel(_)));
 
         assert!(has_caps, "C3: should have CAPABILITIES");
         assert!(has_deny, "C3: should have DENY");
@@ -136,12 +141,20 @@ fn c3_capability_runtime_check() {
     rt.register_agent("secure-worker", caps);
 
     // Granted capabilities succeed
-    assert!(rt.check_capability("secure-worker", Capability::FileRead).is_ok());
-    assert!(rt.check_capability("secure-worker", Capability::ApiCall).is_ok());
+    assert!(rt
+        .check_capability("secure-worker", Capability::FileRead)
+        .is_ok());
+    assert!(rt
+        .check_capability("secure-worker", Capability::ApiCall)
+        .is_ok());
 
     // Denied capabilities fail
-    assert!(rt.check_capability("secure-worker", Capability::FileWrite).is_err());
-    assert!(rt.check_capability("secure-worker", Capability::DbWrite).is_err());
+    assert!(rt
+        .check_capability("secure-worker", Capability::FileWrite)
+        .is_err());
+    assert!(rt
+        .check_capability("secure-worker", Capability::DbWrite)
+        .is_err());
 }
 
 // ===========================================================================
@@ -194,9 +207,11 @@ fn c5_checkpoint_parse() {
 
     if let al_ast::Declaration::OperationDecl { body, .. } = &program.declarations[0].node {
         // Should have a CHECKPOINT statement
-        let has_checkpoint = body.node.stmts.iter().any(|s| {
-            matches!(s.node, al_ast::Statement::Checkpoint { .. })
-        });
+        let has_checkpoint = body
+            .node
+            .stmts
+            .iter()
+            .any(|s| matches!(s.node, al_ast::Statement::Checkpoint { .. }));
         assert!(has_checkpoint, "C5: should have CHECKPOINT statement");
     }
 }
@@ -257,11 +272,14 @@ fn c7_audit_assert_parse() {
     let program = parse_source(fixture.source).expect("C7: parsing should succeed");
     assert_eq!(program.declarations.len(), 1);
 
-    if let al_ast::Declaration::OperationDecl { requires, body, .. } = &program.declarations[0].node {
+    if let al_ast::Declaration::OperationDecl { requires, body, .. } = &program.declarations[0].node
+    {
         assert!(!requires.is_empty(), "C7: should have REQUIRE clauses");
-        let has_assert = body.node.stmts.iter().any(|s| {
-            matches!(s.node, al_ast::Statement::Assert { .. })
-        });
+        let has_assert = body
+            .node
+            .stmts
+            .iter()
+            .any(|s| matches!(s.node, al_ast::Statement::Assert { .. }));
         assert!(has_assert, "C7: should have ASSERT statement");
     }
 }
@@ -301,7 +319,10 @@ OPERATION Verified =>
     let mut checker = al_types::TypeChecker::new();
     checker.check(&program);
     assert_eq!(checker.vc_results.len(), 3, "should generate 3 VCs");
-    assert!(checker.vc_results.iter().all(|vc| vc.vc_id.starts_with("vc_")));
+    assert!(checker
+        .vc_results
+        .iter()
+        .all(|vc| vc.vc_id.starts_with("vc_")));
 }
 
 #[test]
@@ -415,8 +436,14 @@ fn c10_retry_escalate_parse() {
     assert_eq!(program.declarations.len(), 1);
 
     if let al_ast::Declaration::OperationDecl { body, .. } = &program.declarations[0].node {
-        assert!(matches!(body.node.stmts[0].node, al_ast::Statement::Retry { .. }));
-        assert!(matches!(body.node.stmts[1].node, al_ast::Statement::Escalate { .. }));
+        assert!(matches!(
+            body.node.stmts[0].node,
+            al_ast::Statement::Retry { .. }
+        ));
+        assert!(matches!(
+            body.node.stmts[1].node,
+            al_ast::Statement::Escalate { .. }
+        ));
     }
 }
 
@@ -468,7 +495,10 @@ fn c11_match_body_statement_keywords() {
     assert_eq!(program.declarations.len(), 1);
 
     if let al_ast::Declaration::OperationDecl { body, .. } = &program.declarations[0].node {
-        if let al_ast::Statement::Match { arms, otherwise, .. } = &body.node.stmts[0].node {
+        if let al_ast::Statement::Match {
+            arms, otherwise, ..
+        } = &body.node.stmts[0].node
+        {
             assert_eq!(arms.len(), 2, "C11: should have 2 WHEN arms");
             // First arm: EMIT val (wrapped in synthetic block)
             assert!(
@@ -588,9 +618,8 @@ fn all_fixtures_conform() {
         let parse_result = parse_source(fixture.source);
 
         if fixture.should_parse {
-            let program = parse_result.unwrap_or_else(|e| {
-                panic!("Fixture {} should parse but got: {}", fixture.id, e)
-            });
+            let program = parse_result
+                .unwrap_or_else(|e| panic!("Fixture {} should parse but got: {}", fixture.id, e));
 
             if let Some(expected) = fixture.expected_declarations {
                 assert_eq!(

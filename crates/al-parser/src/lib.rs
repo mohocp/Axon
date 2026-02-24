@@ -100,9 +100,7 @@ impl Parser {
     }
 
     fn eat_terminator(&mut self) {
-        if matches!(self.peek(), Token::Semicolon) {
-            self.advance();
-        } else if matches!(self.peek(), Token::Newline) {
+        if matches!(self.peek(), Token::Semicolon | Token::Newline) {
             self.advance();
         }
         // Also eat any extra newlines
@@ -169,12 +167,14 @@ impl Parser {
         }
 
         let end = self.peek_span();
-        let span = Span::new(start.offset, start.line, start.column, end.offset - start.offset);
+        let span = Span::new(
+            start.offset,
+            start.line,
+            start.column,
+            end.offset - start.offset,
+        );
 
-        Program {
-            declarations,
-            span,
-        }
+        Program { declarations, span }
     }
 
     /// Advance past tokens until we reach a declaration keyword or EOF.
@@ -307,7 +307,14 @@ impl Parser {
             start.column,
             end.offset.saturating_sub(start.offset),
         );
-        Ok(Spanned::new(FieldDecl { name, ty, constraint }, span))
+        Ok(Spanned::new(
+            FieldDecl {
+                name,
+                ty,
+                constraint,
+            },
+            span,
+        ))
     }
 
     // AGENT Name => { agent_property* }
@@ -982,12 +989,10 @@ impl Parser {
                 Pattern::Literal(Literal::None)
             }
             Token::Integer(v) => {
-                let v = v;
                 self.advance();
                 Pattern::Literal(Literal::Integer(v))
             }
             Token::Float(v) => {
-                let v = v;
                 self.advance();
                 Pattern::Literal(Literal::Float(v))
             }
@@ -1022,10 +1027,7 @@ impl Parser {
                 }
             }
             _ => {
-                self.error(format!(
-                    "expected pattern, found `{}`",
-                    self.peek()
-                ));
+                self.error(format!("expected pattern, found `{}`", self.peek()));
                 return Err(());
             }
         };
@@ -1488,9 +1490,7 @@ impl Parser {
                 );
                 Ok(Spanned::new(Expr::Map { items }, span))
             }
-            Token::Fork => {
-                self.parse_fork_expr()
-            }
+            Token::Fork => self.parse_fork_expr(),
             Token::Resume => {
                 // RESUME(expr)
                 self.advance();
@@ -1512,10 +1512,7 @@ impl Parser {
                 ))
             }
             _ => {
-                self.error(format!(
-                    "expected expression, found `{}`",
-                    self.peek()
-                ));
+                self.error(format!("expected expression, found `{}`", self.peek()));
                 Err(())
             }
         }
@@ -1829,10 +1826,7 @@ impl Parser {
             start.column,
             end.offset.saturating_sub(start.offset),
         );
-        Ok(Spanned::new(
-            Argument { name: None, value },
-            span,
-        ))
+        Ok(Spanned::new(Argument { name: None, value }, span))
     }
 
     // ── Helper parsers ───────────────────────────────────────────────
@@ -2029,7 +2023,7 @@ impl Parser {
 ///
 /// Returns `Ok(Program)` on success, or `Err(diagnostics)` on failure.
 pub fn parse(source: &str) -> Result<Program, Vec<Diagnostic>> {
-    let tokens = al_lexer::tokenize(source).map_err(|diags| diags)?;
+    let tokens = al_lexer::tokenize(source)?;
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program();
 
@@ -2225,17 +2219,15 @@ mod tests {
 }"#,
         );
         match &prog.declarations[0].node {
-            Declaration::OperationDecl { body, .. } => {
-                match &body.node.stmts[0].node {
-                    Statement::Match {
-                        arms, otherwise, ..
-                    } => {
-                        assert_eq!(arms.len(), 2);
-                        assert!(otherwise.is_some());
-                    }
-                    _ => panic!("expected Match"),
+            Declaration::OperationDecl { body, .. } => match &body.node.stmts[0].node {
+                Statement::Match {
+                    arms, otherwise, ..
+                } => {
+                    assert_eq!(arms.len(), 2);
+                    assert!(otherwise.is_some());
                 }
-            }
+                _ => panic!("expected Match"),
+            },
             _ => panic!("expected OperationDecl"),
         }
     }
@@ -2244,15 +2236,13 @@ mod tests {
     fn parse_loop_stmt() {
         let prog = parse_ok("OPERATION Test => BODY { LOOP max: 10 => { EMIT x } }");
         match &prog.declarations[0].node {
-            Declaration::OperationDecl { body, .. } => {
-                match &body.node.stmts[0].node {
-                    Statement::Loop { max_iters, body } => {
-                        assert_eq!(max_iters.node, 10);
-                        assert_eq!(body.node.stmts.len(), 1);
-                    }
-                    _ => panic!("expected Loop"),
+            Declaration::OperationDecl { body, .. } => match &body.node.stmts[0].node {
+                Statement::Loop { max_iters, body } => {
+                    assert_eq!(max_iters.node, 10);
+                    assert_eq!(body.node.stmts.len(), 1);
                 }
-            }
+                _ => panic!("expected Loop"),
+            },
             _ => panic!("expected OperationDecl"),
         }
     }
@@ -2264,7 +2254,10 @@ mod tests {
             Declaration::OperationDecl { body, .. } => {
                 assert_eq!(body.node.stmts.len(), 2);
                 assert!(matches!(body.node.stmts[0].node, Statement::Retry { .. }));
-                assert!(matches!(body.node.stmts[1].node, Statement::Escalate { .. }));
+                assert!(matches!(
+                    body.node.stmts[1].node,
+                    Statement::Escalate { .. }
+                ));
             }
             _ => panic!("expected OperationDecl"),
         }
@@ -2274,14 +2267,12 @@ mod tests {
     fn parse_checkpoint() {
         let prog = parse_ok(r#"OPERATION Test => BODY { CHECKPOINT "save1" }"#);
         match &prog.declarations[0].node {
-            Declaration::OperationDecl { body, .. } => {
-                match &body.node.stmts[0].node {
-                    Statement::Checkpoint { label } => {
-                        assert_eq!(label.as_ref().unwrap().node, "save1");
-                    }
-                    _ => panic!("expected Checkpoint"),
+            Declaration::OperationDecl { body, .. } => match &body.node.stmts[0].node {
+                Statement::Checkpoint { label } => {
+                    assert_eq!(label.as_ref().unwrap().node, "save1");
                 }
-            }
+                _ => panic!("expected Checkpoint"),
+            },
             _ => panic!("expected OperationDecl"),
         }
     }
@@ -2309,19 +2300,15 @@ mod tests {
     fn parse_function_call() {
         let prog = parse_ok("OPERATION Test => BODY { STORE x = f(a, b) }");
         match &prog.declarations[0].node {
-            Declaration::OperationDecl { body, .. } => {
-                match &body.node.stmts[0].node {
-                    Statement::Store { value, .. } => {
-                        match &value.node {
-                            Expr::Call { args, .. } => {
-                                assert_eq!(args.len(), 2);
-                            }
-                            _ => panic!("expected Call"),
-                        }
+            Declaration::OperationDecl { body, .. } => match &body.node.stmts[0].node {
+                Statement::Store { value, .. } => match &value.node {
+                    Expr::Call { args, .. } => {
+                        assert_eq!(args.len(), 2);
                     }
-                    _ => panic!("expected Store"),
-                }
-            }
+                    _ => panic!("expected Call"),
+                },
+                _ => panic!("expected Store"),
+            },
             _ => panic!("expected OperationDecl"),
         }
     }
@@ -2330,14 +2317,12 @@ mod tests {
     fn parse_member_access() {
         let prog = parse_ok("OPERATION Test => BODY { STORE x = obj.field }");
         match &prog.declarations[0].node {
-            Declaration::OperationDecl { body, .. } => {
-                match &body.node.stmts[0].node {
-                    Statement::Store { value, .. } => {
-                        assert!(matches!(value.node, Expr::Member { .. }));
-                    }
-                    _ => panic!("expected Store"),
+            Declaration::OperationDecl { body, .. } => match &body.node.stmts[0].node {
+                Statement::Store { value, .. } => {
+                    assert!(matches!(value.node, Expr::Member { .. }));
                 }
-            }
+                _ => panic!("expected Store"),
+            },
             _ => panic!("expected OperationDecl"),
         }
     }
@@ -2346,17 +2331,13 @@ mod tests {
     fn parse_list_literal() {
         let prog = parse_ok("OPERATION Test => BODY { STORE x = [1, 2, 3] }");
         match &prog.declarations[0].node {
-            Declaration::OperationDecl { body, .. } => {
-                match &body.node.stmts[0].node {
-                    Statement::Store { value, .. } => {
-                        match &value.node {
-                            Expr::List { elements } => assert_eq!(elements.len(), 3),
-                            _ => panic!("expected List"),
-                        }
-                    }
-                    _ => panic!("expected Store"),
-                }
-            }
+            Declaration::OperationDecl { body, .. } => match &body.node.stmts[0].node {
+                Statement::Store { value, .. } => match &value.node {
+                    Expr::List { elements } => assert_eq!(elements.len(), 3),
+                    _ => panic!("expected List"),
+                },
+                _ => panic!("expected Store"),
+            },
             _ => panic!("expected OperationDecl"),
         }
     }
@@ -2396,20 +2377,18 @@ OPERATION GetUser => BODY { EMIT NONE }
 }"#;
         let prog = parse_ok(src);
         match &prog.declarations[0].node {
-            Declaration::OperationDecl { body, .. } => {
-                match &body.node.stmts[0].node {
-                    Statement::Delegate {
-                        task,
-                        target,
-                        clauses,
-                    } => {
-                        assert_eq!(task.node, "analysis");
-                        assert_eq!(target.node, "worker");
-                        assert_eq!(clauses.len(), 2);
-                    }
-                    _ => panic!("expected Delegate"),
+            Declaration::OperationDecl { body, .. } => match &body.node.stmts[0].node {
+                Statement::Delegate {
+                    task,
+                    target,
+                    clauses,
+                } => {
+                    assert_eq!(task.node, "analysis");
+                    assert_eq!(target.node, "worker");
+                    assert_eq!(clauses.len(), 2);
                 }
-            }
+                _ => panic!("expected Delegate"),
+            },
             _ => panic!("expected OperationDecl"),
         }
     }
@@ -2514,10 +2493,7 @@ OPERATION GetUser => BODY { EMIT NONE }
                         }
                         // FAILURE -> RETRY
                         if let MatchBody::Block(block) = &arms[1].node.body.node {
-                            assert!(matches!(
-                                block.node.stmts[0].node,
-                                Statement::Retry { .. }
-                            ));
+                            assert!(matches!(block.node.stmts[0].node, Statement::Retry { .. }));
                         } else {
                             panic!("expected Block wrapping RETRY");
                         }

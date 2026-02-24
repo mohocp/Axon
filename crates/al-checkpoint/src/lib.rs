@@ -114,7 +114,9 @@ impl EffectJournal {
 
     /// Check if an effect with the given key has already been committed.
     pub fn is_committed(&self, key: &str) -> bool {
-        self.entries.iter().any(|e| e.idempotency_key == key && e.committed)
+        self.entries
+            .iter()
+            .any(|e| e.idempotency_key == key && e.committed)
     }
 
     /// Get all entries in the journal.
@@ -182,7 +184,11 @@ impl CheckpointStore {
     }
 
     /// Validate checkpoint integrity before restore.
-    pub fn validate(&self, checkpoint_id: &str, expected_profile: &str) -> Result<(), RuntimeFailure> {
+    pub fn validate(
+        &self,
+        checkpoint_id: &str,
+        expected_profile: &str,
+    ) -> Result<(), RuntimeFailure> {
         let cp = self.restore(checkpoint_id)?;
         if cp.meta.profile != expected_profile {
             return Err(RuntimeFailure::new(
@@ -207,10 +213,7 @@ impl CheckpointStore {
         if !cp.validate_hash() {
             return Err(RuntimeFailure::with_details(
                 ErrorCode::CheckpointInvalid,
-                format!(
-                    "Checkpoint '{}' hash integrity check failed",
-                    checkpoint_id
-                ),
+                format!("Checkpoint '{}' hash integrity check failed", checkpoint_id),
                 serde_json::json!({
                     "stored_hash": cp.meta.hash,
                     "computed_hash": cp.compute_state_hash(),
@@ -221,10 +224,7 @@ impl CheckpointStore {
     }
 
     /// Validate schema version compatibility.
-    pub fn validate_schema_version(
-        &self,
-        checkpoint_id: &str,
-    ) -> Result<(), RuntimeFailure> {
+    pub fn validate_schema_version(&self, checkpoint_id: &str) -> Result<(), RuntimeFailure> {
         let cp = self.restore(checkpoint_id)?;
         if cp.meta.schema_version != CHECKPOINT_SCHEMA_VERSION {
             return Err(RuntimeFailure::with_details(
@@ -447,13 +447,11 @@ mod tests {
 
     #[test]
     fn effect_journal_from_entries_restores_state() {
-        let entries = vec![
-            EffectEntry {
-                idempotency_key: "key-1".to_string(),
-                committed: true,
-                description: "done".to_string(),
-            },
-        ];
+        let entries = vec![EffectEntry {
+            idempotency_key: "key-1".to_string(),
+            committed: true,
+            description: "done".to_string(),
+        }];
         let journal = EffectJournal::from_entries(entries);
         assert!(journal.is_committed("key-1"));
         assert_eq!(journal.entries().len(), 1);

@@ -25,16 +25,11 @@ use crate::{Runtime, Value};
 /// Names of built-in stdlib operations.
 const STDLIB_BUILTINS: &[&str] = &[
     // core.data
-    "FILTER", "MAP", "REDUCE", "SORT", "GROUP", "TAKE", "SKIP",
-    // core.io (stub)
-    "READ", "WRITE",
-    // core.text
-    "PARSE", "FORMAT", "REGEX", "TOKENIZE",
-    // core.http (stub)
-    "GET", "POST",
-    // agent.llm (stub)
-    "GENERATE", "CLASSIFY", "EXTRACT",
-    // agent.memory (in-memory)
+    "FILTER", "MAP", "REDUCE", "SORT", "GROUP", "TAKE", "SKIP", // core.io (stub)
+    "READ", "WRITE", // core.text
+    "PARSE", "FORMAT", "REGEX", "TOKENIZE", // core.http (stub)
+    "GET", "POST", // agent.llm (stub)
+    "GENERATE", "CLASSIFY", "EXTRACT", // agent.memory (in-memory)
     "REMEMBER", "RECALL", "FORGET",
 ];
 
@@ -58,10 +53,7 @@ pub enum InterpreterError {
     /// Program was explicitly halted.
     Halted { reason: String, value: Value },
     /// RETRY exhausted all attempts.
-    RetryExhausted {
-        count: i64,
-        last_failure: Value,
-    },
+    RetryExhausted { count: i64, last_failure: Value },
     /// Capability denied for an operation.
     CapabilityDenied {
         agent_id: String,
@@ -82,10 +74,20 @@ impl std::fmt::Display for InterpreterError {
             Self::Halted { reason, value } => {
                 write!(f, "HALT({}): {}", reason, value)
             }
-            Self::RetryExhausted { count, last_failure } => {
-                write!(f, "RETRY exhausted after {} attempts: {}", count, last_failure)
+            Self::RetryExhausted {
+                count,
+                last_failure,
+            } => {
+                write!(
+                    f,
+                    "RETRY exhausted after {} attempts: {}",
+                    count, last_failure
+                )
             }
-            Self::CapabilityDenied { agent_id, capability } => {
+            Self::CapabilityDenied {
+                agent_id,
+                capability,
+            } => {
                 write!(
                     f,
                     "agent '{}' lacks required capability '{}'",
@@ -192,8 +194,7 @@ impl Interpreter {
                     for prop in properties {
                         if let AgentProperty::Capabilities(cap_names) = &prop.node {
                             for cap_name in cap_names {
-                                if let Ok(cap) =
-                                    al_capabilities::resolve_capability(&cap_name.node)
+                                if let Ok(cap) = al_capabilities::resolve_capability(&cap_name.node)
                                 {
                                     caps.insert(cap);
                                 }
@@ -206,7 +207,11 @@ impl Interpreter {
                     }
                 }
                 Declaration::OperationDecl {
-                    name, inputs, body, requires, ..
+                    name,
+                    inputs,
+                    body,
+                    requires,
+                    ..
                 } => {
                     let param_names: Vec<String> =
                         inputs.iter().map(|p| p.node.name.node.clone()).collect();
@@ -260,9 +265,7 @@ impl Interpreter {
             .iter()
             .find(|(n, _)| n == name)
             .map(|(_, c)| c.clone())
-            .ok_or_else(|| {
-                InterpreterError::UndefinedOperation(format!("pipeline '{}'", name))
-            })?;
+            .ok_or_else(|| InterpreterError::UndefinedOperation(format!("pipeline '{}'", name)))?;
         self.exec_pipeline_chain(&chain, Value::None)
     }
 
@@ -350,11 +353,7 @@ impl Interpreter {
     // Operation dispatch
     // =====================================================================
 
-    fn call_operation(
-        &mut self,
-        name: &str,
-        args: Vec<Value>,
-    ) -> Result<Value, InterpreterError> {
+    fn call_operation(&mut self, name: &str, args: Vec<Value>) -> Result<Value, InterpreterError> {
         // Check for built-in stdlib operations first.
         if STDLIB_BUILTINS.contains(&name) {
             return self.call_stdlib_builtin(name, args);
@@ -494,10 +493,7 @@ impl Interpreter {
                 self.mutables = saved_mutables;
                 Ok(Value::Failure {
                     code: "RETRY_EXHAUSTED".to_string(),
-                    message: format!(
-                        "retry exhausted after {} attempts",
-                        retry_count + 1
-                    ),
+                    message: format!("retry exhausted after {} attempts", retry_count + 1),
                     details: Box::new(last_failure),
                 })
             }
@@ -509,13 +505,11 @@ impl Interpreter {
                 match other {
                     Ok(Some(val)) => Ok(val),
                     Ok(None) => Ok(Value::None),
-                    Err(InterpreterError::Halted { reason, value }) => {
-                        Ok(Value::Failure {
-                            code: "HALTED".to_string(),
-                            message: reason,
-                            details: Box::new(value),
-                        })
-                    }
+                    Err(InterpreterError::Halted { reason, value }) => Ok(Value::Failure {
+                        code: "HALTED".to_string(),
+                        message: reason,
+                        details: Box::new(value),
+                    }),
                     Err(e) => Err(e),
                 }
             }
@@ -639,9 +633,7 @@ impl Interpreter {
     /// for each element, threading the result forward.
     fn stdlib_reduce(&mut self, args: Vec<Value>) -> Result<Value, InterpreterError> {
         let (list, initial, op_name) = match args.as_slice() {
-            [Value::List(items), init, Value::Str(op)] => {
-                (items.clone(), init.clone(), op.clone())
-            }
+            [Value::List(items), init, Value::Str(op)] => (items.clone(), init.clone(), op.clone()),
             [_, _, Value::Str(_)] => {
                 return Err(InterpreterError::TypeError(
                     "REDUCE: first argument must be a List".to_string(),
@@ -685,7 +677,7 @@ impl Interpreter {
         };
 
         let mut sorted = list;
-        sorted.sort_by(|a, b| value_cmp(a, b));
+        sorted.sort_by(value_cmp);
         Ok(Value::List(sorted))
     }
 
@@ -786,7 +778,8 @@ impl Interpreter {
 
         // Record effect for idempotency
         let effect_key = format!("read:{}", path);
-        self.runtime.record_effect(&effect_key, &format!("READ {}", path));
+        self.runtime
+            .record_effect(&effect_key, &format!("READ {}", path));
 
         // MVP stub: return a deterministic placeholder
         Ok(Value::Str(format!("[stub:read:{}]", path)))
@@ -807,7 +800,10 @@ impl Interpreter {
         };
 
         let effect_key = format!("write:{}", path);
-        if !self.runtime.record_effect(&effect_key, &format!("WRITE {} ({} bytes)", path, content.len())) {
+        if !self.runtime.record_effect(
+            &effect_key,
+            &format!("WRITE {} ({} bytes)", path, content.len()),
+        ) {
             // Already committed — skip (idempotency)
             return Ok(Value::Bool(true));
         }
@@ -834,36 +830,30 @@ impl Interpreter {
         };
 
         match format.as_str() {
-            "json" => {
-                match serde_json::from_str::<serde_json::Value>(&text) {
-                    Ok(json_val) => Ok(Value::from_json(&json_val)),
-                    Err(e) => Ok(Value::Failure {
-                        code: "PARSE_ERROR".to_string(),
-                        message: format!("JSON parse error: {}", e),
-                        details: Box::new(Value::Str(text)),
-                    }),
-                }
-            }
-            "int" => {
-                match text.trim().parse::<i64>() {
-                    Ok(n) => Ok(Value::Int(n)),
-                    Err(e) => Ok(Value::Failure {
-                        code: "PARSE_ERROR".to_string(),
-                        message: format!("integer parse error: {}", e),
-                        details: Box::new(Value::Str(text)),
-                    }),
-                }
-            }
-            "float" => {
-                match text.trim().parse::<f64>() {
-                    Ok(f) => Ok(Value::Float(f)),
-                    Err(e) => Ok(Value::Failure {
-                        code: "PARSE_ERROR".to_string(),
-                        message: format!("float parse error: {}", e),
-                        details: Box::new(Value::Str(text)),
-                    }),
-                }
-            }
+            "json" => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(json_val) => Ok(Value::from_json(&json_val)),
+                Err(e) => Ok(Value::Failure {
+                    code: "PARSE_ERROR".to_string(),
+                    message: format!("JSON parse error: {}", e),
+                    details: Box::new(Value::Str(text)),
+                }),
+            },
+            "int" => match text.trim().parse::<i64>() {
+                Ok(n) => Ok(Value::Int(n)),
+                Err(e) => Ok(Value::Failure {
+                    code: "PARSE_ERROR".to_string(),
+                    message: format!("integer parse error: {}", e),
+                    details: Box::new(Value::Str(text)),
+                }),
+            },
+            "float" => match text.trim().parse::<f64>() {
+                Ok(f) => Ok(Value::Float(f)),
+                Err(e) => Ok(Value::Failure {
+                    code: "PARSE_ERROR".to_string(),
+                    message: format!("float parse error: {}", e),
+                    details: Box::new(Value::Str(text)),
+                }),
+            },
             _ => Ok(Value::Failure {
                 code: "NOT_IMPLEMENTED".to_string(),
                 message: format!("PARSE format '{}' not supported in MVP", format),
@@ -961,7 +951,8 @@ impl Interpreter {
         };
 
         let effect_key = format!("http-get:{}", url);
-        self.runtime.record_effect(&effect_key, &format!("GET {}", url));
+        self.runtime
+            .record_effect(&effect_key, &format!("GET {}", url));
 
         Ok(Value::Str(format!("[stub:get:{}]", url)))
     }
@@ -980,7 +971,10 @@ impl Interpreter {
         };
 
         let effect_key = format!("http-post:{}", url);
-        if !self.runtime.record_effect(&effect_key, &format!("POST {}", url)) {
+        if !self
+            .runtime
+            .record_effect(&effect_key, &format!("POST {}", url))
+        {
             // Already committed — idempotency skip
             return Ok(Value::Str("[stub:post:skipped]".to_string()));
         }
@@ -1010,7 +1004,10 @@ impl Interpreter {
         let effect_key = format!("llm-generate:{}", simple_effect_hash(&prompt));
         self.runtime.record_effect(&effect_key, "GENERATE");
 
-        Ok(Value::Str(format!("[stub:generate:{}]", truncate(&prompt, 32))))
+        Ok(Value::Str(format!(
+            "[stub:generate:{}]",
+            truncate(&prompt, 32)
+        )))
     }
 
     /// CLASSIFY(text, categories) -> Result[String]
@@ -1132,10 +1129,7 @@ impl Interpreter {
     // Block execution
     // =====================================================================
 
-    fn exec_block(
-        &mut self,
-        block: &Spanned<Block>,
-    ) -> Result<Option<Value>, InterpreterError> {
+    fn exec_block(&mut self, block: &Spanned<Block>) -> Result<Option<Value>, InterpreterError> {
         let mut last_emit: Option<Value> = None;
         for stmt in &block.node.stmts {
             match self.exec_stmt(stmt)? {
@@ -1162,10 +1156,7 @@ impl Interpreter {
     // Statement execution
     // =====================================================================
 
-    fn exec_stmt(
-        &mut self,
-        stmt: &Spanned<Statement>,
-    ) -> Result<StmtResult, InterpreterError> {
+    fn exec_stmt(&mut self, stmt: &Spanned<Statement>) -> Result<StmtResult, InterpreterError> {
         match &stmt.node {
             // ----- STORE (immutable binding) ---------------------------------
             Statement::Store { name, value, .. } => {
@@ -1186,9 +1177,7 @@ impl Interpreter {
             // ----- ASSIGN (reassign mutable) ---------------------------------
             Statement::Assign { target, value } => {
                 if !self.mutables.contains(&target.node) {
-                    return Err(InterpreterError::ImmutableAssign(
-                        target.node.clone(),
-                    ));
+                    return Err(InterpreterError::ImmutableAssign(target.node.clone()));
                 }
                 let val = self.eval_expr(value)?;
                 self.runtime.reg_set(target.node.clone(), val);
@@ -1204,9 +1193,7 @@ impl Interpreter {
                 let val = self.eval_expr(expr)?;
 
                 for arm in arms {
-                    if let Some(bindings) =
-                        match_pattern(&arm.node.pattern, &val)
-                    {
+                    if let Some(bindings) = match_pattern(&arm.node.pattern, &val) {
                         for (k, v) in &bindings {
                             self.runtime.reg_set(k.clone(), v.clone());
                         }
@@ -1225,9 +1212,8 @@ impl Interpreter {
             Statement::Loop { max_iters, body } => {
                 let max = max_iters.node;
                 for _i in 0..max {
-                    match self.exec_block(body)? {
-                        Some(val) => return Ok(StmtResult::Emit(val)),
-                        None => {}
+                    if let Some(val) = self.exec_block(body)? {
+                        return Ok(StmtResult::Emit(val));
                     }
                 }
                 Ok(StmtResult::Continue)
@@ -1424,9 +1410,7 @@ impl Interpreter {
             Expr::Member { object, field } => {
                 let obj = self.eval_expr(object)?;
                 match &obj {
-                    Value::Map(map) => {
-                        Ok(map.get(&field.node).cloned().unwrap_or(Value::None))
-                    }
+                    Value::Map(map) => Ok(map.get(&field.node).cloned().unwrap_or(Value::None)),
                     _ => Err(InterpreterError::TypeError(format!(
                         "cannot access field '{}' on {}",
                         field.node, obj
@@ -1516,8 +1500,7 @@ impl Interpreter {
                 let e = self.eval_expr(end)?;
                 match (&s, &e) {
                     (Value::Int(a), Value::Int(b)) => {
-                        let items: Vec<Value> =
-                            (*a..=*b).map(Value::Int).collect();
+                        let items: Vec<Value> = (*a..=*b).map(Value::Int).collect();
                         Ok(Value::List(items))
                     }
                     _ => Err(InterpreterError::TypeError(
@@ -1537,10 +1520,7 @@ impl Interpreter {
 
 /// Attempt to match `value` against `pattern`, returning variable bindings
 /// on success.
-fn match_pattern(
-    pattern: &Spanned<Pattern>,
-    value: &Value,
-) -> Option<HashMap<String, Value>> {
+fn match_pattern(pattern: &Spanned<Pattern>, value: &Value) -> Option<HashMap<String, Value>> {
     match &pattern.node {
         Pattern::Wildcard => Some(HashMap::new()),
 
@@ -1575,12 +1555,10 @@ fn match_pattern(
                 let mut bindings = HashMap::new();
 
                 // Bind error code.
-                bindings
-                    .insert(code.node.clone(), Value::Str(val_code.clone()));
+                bindings.insert(code.node.clone(), Value::Str(val_code.clone()));
 
                 // Match message sub-pattern.
-                let msg_bindings =
-                    match_pattern(msg_pat, &Value::Str(val_msg.clone()))?;
+                let msg_bindings = match_pattern(msg_pat, &Value::Str(val_msg.clone()))?;
                 bindings.extend(msg_bindings);
 
                 // Match details sub-pattern.
@@ -1628,11 +1606,7 @@ fn literal_to_value(lit: &Literal) -> Value {
 // Binary & unary operators
 // =========================================================================
 
-fn eval_binary_op(
-    left: &Value,
-    op: &BinaryOp,
-    right: &Value,
-) -> Result<Value, InterpreterError> {
+fn eval_binary_op(left: &Value, op: &BinaryOp, right: &Value) -> Result<Value, InterpreterError> {
     match (left, op, right) {
         // Integer arithmetic
         (Value::Int(a), BinaryOp::Add, Value::Int(b)) => Ok(Value::Int(a + b)),
@@ -1662,101 +1636,47 @@ fn eval_binary_op(
         }
 
         // Float arithmetic
-        (Value::Float(a), BinaryOp::Add, Value::Float(b)) => {
-            Ok(Value::Float(a + b))
-        }
-        (Value::Float(a), BinaryOp::Sub, Value::Float(b)) => {
-            Ok(Value::Float(a - b))
-        }
-        (Value::Float(a), BinaryOp::Mul, Value::Float(b)) => {
-            Ok(Value::Float(a * b))
-        }
-        (Value::Float(a), BinaryOp::Div, Value::Float(b)) => {
-            Ok(Value::Float(a / b))
-        }
+        (Value::Float(a), BinaryOp::Add, Value::Float(b)) => Ok(Value::Float(a + b)),
+        (Value::Float(a), BinaryOp::Sub, Value::Float(b)) => Ok(Value::Float(a - b)),
+        (Value::Float(a), BinaryOp::Mul, Value::Float(b)) => Ok(Value::Float(a * b)),
+        (Value::Float(a), BinaryOp::Div, Value::Float(b)) => Ok(Value::Float(a / b)),
 
         // Mixed numeric (int + float → float)
-        (Value::Int(a), BinaryOp::Add, Value::Float(b)) => {
-            Ok(Value::Float(*a as f64 + b))
-        }
-        (Value::Float(a), BinaryOp::Add, Value::Int(b)) => {
-            Ok(Value::Float(a + *b as f64))
-        }
-        (Value::Int(a), BinaryOp::Sub, Value::Float(b)) => {
-            Ok(Value::Float(*a as f64 - b))
-        }
-        (Value::Float(a), BinaryOp::Sub, Value::Int(b)) => {
-            Ok(Value::Float(a - *b as f64))
-        }
-        (Value::Int(a), BinaryOp::Mul, Value::Float(b)) => {
-            Ok(Value::Float(*a as f64 * b))
-        }
-        (Value::Float(a), BinaryOp::Mul, Value::Int(b)) => {
-            Ok(Value::Float(a * *b as f64))
-        }
+        (Value::Int(a), BinaryOp::Add, Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
+        (Value::Float(a), BinaryOp::Add, Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
+        (Value::Int(a), BinaryOp::Sub, Value::Float(b)) => Ok(Value::Float(*a as f64 - b)),
+        (Value::Float(a), BinaryOp::Sub, Value::Int(b)) => Ok(Value::Float(a - *b as f64)),
+        (Value::Int(a), BinaryOp::Mul, Value::Float(b)) => Ok(Value::Float(*a as f64 * b)),
+        (Value::Float(a), BinaryOp::Mul, Value::Int(b)) => Ok(Value::Float(a * *b as f64)),
 
         // String concatenation
-        (Value::Str(a), BinaryOp::Add, Value::Str(b)) => {
-            Ok(Value::Str(format!("{}{}", a, b)))
-        }
+        (Value::Str(a), BinaryOp::Add, Value::Str(b)) => Ok(Value::Str(format!("{}{}", a, b))),
 
         // Integer comparisons
-        (Value::Int(a), BinaryOp::Eq, Value::Int(b)) => {
-            Ok(Value::Bool(a == b))
-        }
-        (Value::Int(a), BinaryOp::Neq, Value::Int(b)) => {
-            Ok(Value::Bool(a != b))
-        }
-        (Value::Int(a), BinaryOp::Gt, Value::Int(b)) => {
-            Ok(Value::Bool(a > b))
-        }
-        (Value::Int(a), BinaryOp::Gte, Value::Int(b)) => {
-            Ok(Value::Bool(a >= b))
-        }
-        (Value::Int(a), BinaryOp::Lt, Value::Int(b)) => {
-            Ok(Value::Bool(a < b))
-        }
-        (Value::Int(a), BinaryOp::Lte, Value::Int(b)) => {
-            Ok(Value::Bool(a <= b))
-        }
+        (Value::Int(a), BinaryOp::Eq, Value::Int(b)) => Ok(Value::Bool(a == b)),
+        (Value::Int(a), BinaryOp::Neq, Value::Int(b)) => Ok(Value::Bool(a != b)),
+        (Value::Int(a), BinaryOp::Gt, Value::Int(b)) => Ok(Value::Bool(a > b)),
+        (Value::Int(a), BinaryOp::Gte, Value::Int(b)) => Ok(Value::Bool(a >= b)),
+        (Value::Int(a), BinaryOp::Lt, Value::Int(b)) => Ok(Value::Bool(a < b)),
+        (Value::Int(a), BinaryOp::Lte, Value::Int(b)) => Ok(Value::Bool(a <= b)),
 
         // Float comparisons
-        (Value::Float(a), BinaryOp::Eq, Value::Float(b)) => {
-            Ok(Value::Bool(a == b))
-        }
-        (Value::Float(a), BinaryOp::Neq, Value::Float(b)) => {
-            Ok(Value::Bool(a != b))
-        }
-        (Value::Float(a), BinaryOp::Gt, Value::Float(b)) => {
-            Ok(Value::Bool(a > b))
-        }
-        (Value::Float(a), BinaryOp::Lt, Value::Float(b)) => {
-            Ok(Value::Bool(a < b))
-        }
+        (Value::Float(a), BinaryOp::Eq, Value::Float(b)) => Ok(Value::Bool(a == b)),
+        (Value::Float(a), BinaryOp::Neq, Value::Float(b)) => Ok(Value::Bool(a != b)),
+        (Value::Float(a), BinaryOp::Gt, Value::Float(b)) => Ok(Value::Bool(a > b)),
+        (Value::Float(a), BinaryOp::Lt, Value::Float(b)) => Ok(Value::Bool(a < b)),
 
         // String comparisons
-        (Value::Str(a), BinaryOp::Eq, Value::Str(b)) => {
-            Ok(Value::Bool(a == b))
-        }
-        (Value::Str(a), BinaryOp::Neq, Value::Str(b)) => {
-            Ok(Value::Bool(a != b))
-        }
+        (Value::Str(a), BinaryOp::Eq, Value::Str(b)) => Ok(Value::Bool(a == b)),
+        (Value::Str(a), BinaryOp::Neq, Value::Str(b)) => Ok(Value::Bool(a != b)),
 
         // Boolean comparisons
-        (Value::Bool(a), BinaryOp::Eq, Value::Bool(b)) => {
-            Ok(Value::Bool(a == b))
-        }
-        (Value::Bool(a), BinaryOp::Neq, Value::Bool(b)) => {
-            Ok(Value::Bool(a != b))
-        }
+        (Value::Bool(a), BinaryOp::Eq, Value::Bool(b)) => Ok(Value::Bool(a == b)),
+        (Value::Bool(a), BinaryOp::Neq, Value::Bool(b)) => Ok(Value::Bool(a != b)),
 
         // Logical operators
-        (Value::Bool(a), BinaryOp::And, Value::Bool(b)) => {
-            Ok(Value::Bool(*a && *b))
-        }
-        (Value::Bool(a), BinaryOp::Or, Value::Bool(b)) => {
-            Ok(Value::Bool(*a || *b))
-        }
+        (Value::Bool(a), BinaryOp::And, Value::Bool(b)) => Ok(Value::Bool(*a && *b)),
+        (Value::Bool(a), BinaryOp::Or, Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
 
         _ => Err(InterpreterError::TypeError(format!(
             "unsupported binary operation: {} {:?} {}",
@@ -1765,10 +1685,7 @@ fn eval_binary_op(
     }
 }
 
-fn eval_unary_op(
-    op: &UnaryOp,
-    operand: &Value,
-) -> Result<Value, InterpreterError> {
+fn eval_unary_op(op: &UnaryOp, operand: &Value) -> Result<Value, InterpreterError> {
     match (op, operand) {
         (UnaryOp::Neg, Value::Int(n)) => Ok(Value::Int(-n)),
         (UnaryOp::Neg, Value::Float(f)) => Ok(Value::Float(-f)),
@@ -1790,8 +1707,12 @@ fn value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => x.cmp(y),
         (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
-        (Value::Int(x), Value::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
-        (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Int(x), Value::Float(y)) => (*x as f64)
+            .partial_cmp(y)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Float(x), Value::Int(y)) => x
+            .partial_cmp(&(*y as f64))
+            .unwrap_or(std::cmp::Ordering::Equal),
         (Value::Str(x), Value::Str(y)) => x.cmp(y),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         // Different types: order by type tag
@@ -1858,6 +1779,7 @@ pub fn execute_source(source: &str) -> Result<Value, String> {
 // =========================================================================
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
 
@@ -1870,11 +1792,7 @@ mod tests {
     }
 
     /// Helper: parse, load, run a named operation with args.
-    fn run_op(
-        source: &str,
-        op_name: &str,
-        args: Vec<Value>,
-    ) -> Result<Value, InterpreterError> {
+    fn run_op(source: &str, op_name: &str, args: Vec<Value>) -> Result<Value, InterpreterError> {
         let program = al_parser::parse(source).expect("parse should succeed");
         let mut interp = Interpreter::new();
         interp.load_program(&program);
@@ -1887,101 +1805,61 @@ mod tests {
 
     #[test]
     fn eval_integer_literal() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 42 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 42 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Int(42));
     }
 
     #[test]
     fn eval_string_literal() {
-        let result = run_op(
-            r#"OPERATION test => BODY { EMIT "hello" }"#,
-            "test",
-            vec![],
-        );
+        let result = run_op(r#"OPERATION test => BODY { EMIT "hello" }"#, "test", vec![]);
         assert_eq!(result.unwrap(), Value::Str("hello".into()));
     }
 
     #[test]
     fn eval_bool_literal() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT TRUE }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT TRUE }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Bool(true));
     }
 
     #[test]
     fn eval_none_literal() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT NONE }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT NONE }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::None);
     }
 
     #[test]
     fn eval_float_literal() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 3.14 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 3.14 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Float(3.14));
     }
 
     #[test]
     fn eval_binary_add_int() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 10 + 32 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 10 + 32 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Int(42));
     }
 
     #[test]
     fn eval_binary_sub_int() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 50 - 8 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 50 - 8 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Int(42));
     }
 
     #[test]
     fn eval_binary_mul_int() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 6 * 7 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 6 * 7 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Int(42));
     }
 
     #[test]
     fn eval_binary_div_int() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 84 / 2 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 84 / 2 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Int(42));
     }
 
     #[test]
     fn eval_div_by_zero_returns_failure() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 1 / 0 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 1 / 0 }", "test", vec![]);
         match result.unwrap() {
             Value::Failure { code, .. } => {
                 assert_eq!(code, "DIVISION_BY_ZERO");
@@ -1992,32 +1870,16 @@ mod tests {
 
     #[test]
     fn eval_comparison_ops() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 5 GT 3 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 5 GT 3 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Bool(true));
 
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 3 LT 5 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 3 LT 5 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Bool(true));
 
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 5 EQ 5 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 5 EQ 5 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Bool(true));
 
-        let result = run_op(
-            "OPERATION test => BODY { EMIT 5 NEQ 3 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT 5 NEQ 3 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Bool(true));
     }
 
@@ -2040,21 +1902,13 @@ mod tests {
 
     #[test]
     fn eval_unary_neg() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT -42 }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT -42 }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Int(-42));
     }
 
     #[test]
     fn eval_unary_not() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT NOT TRUE }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT NOT TRUE }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::Bool(false));
     }
 
@@ -2070,11 +1924,7 @@ mod tests {
 
     #[test]
     fn eval_list_constructor() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT [1, 2, 3] }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT [1, 2, 3] }", "test", vec![]);
         assert_eq!(
             result.unwrap(),
             Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
@@ -2170,21 +2020,13 @@ mod tests {
 
     #[test]
     fn stmt_emit_none() {
-        let result = run_op(
-            "OPERATION test => BODY { EMIT }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { EMIT }", "test", vec![]);
         assert_eq!(result.unwrap(), Value::None);
     }
 
     #[test]
     fn stmt_halt() {
-        let result = run_op(
-            "OPERATION test => BODY { HALT(error) }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { HALT(error) }", "test", vec![]);
         // HALT inside an operation produces a FAILURE value.
         match result.unwrap() {
             Value::Failure { code, .. } => assert_eq!(code, "HALTED"),
@@ -2501,14 +2343,11 @@ mod tests {
         interp.load_program(&program);
         let result = interp.run_operation("test", vec![]).unwrap();
         assert_eq!(result, Value::Int(42));
-        assert!(
-            interp
-                .runtime
-                .audit_log
-                .iter()
-                .any(|e| e.event_type
-                    == al_diagnostics::AuditEventType::CheckpointCreated)
-        );
+        assert!(interp
+            .runtime
+            .audit_log
+            .iter()
+            .any(|e| e.event_type == al_diagnostics::AuditEventType::CheckpointCreated));
     }
 
     // -----------------------------------------------------------------
@@ -2528,13 +2367,10 @@ mod tests {
         interp.load_program(&program);
 
         let agent = interp.runtime.get_agent("Worker").unwrap();
-        assert_eq!(
-            agent.status,
-            crate::AgentStatus::Ready
-        );
-        assert!(
-            agent.capabilities.contains(&al_capabilities::Capability::FileRead)
-        );
+        assert_eq!(agent.status, crate::AgentStatus::Ready);
+        assert!(agent
+            .capabilities
+            .contains(&al_capabilities::Capability::FileRead));
     }
 
     // -----------------------------------------------------------------
@@ -2659,7 +2495,11 @@ mod tests {
         );
         // ALL_COMPLETE: collects all results, returns FORK_JOIN_FAILED with details.
         match result.unwrap() {
-            Value::Failure { code, message, details } => {
+            Value::Failure {
+                code,
+                message,
+                details,
+            } => {
                 assert_eq!(code, "FORK_JOIN_FAILED");
                 assert!(message.contains("1 of 2 branches failed"));
                 // Details should be a list of {branch, failure} maps.
@@ -2805,11 +2645,7 @@ mod tests {
 
     #[test]
     fn escalate_without_message_uses_agent_default() {
-        let result = run_op(
-            "OPERATION test => BODY { ESCALATE }",
-            "test",
-            vec![],
-        );
+        let result = run_op("OPERATION test => BODY { ESCALATE }", "test", vec![]);
         match result {
             Err(InterpreterError::RuntimeFailure(rf)) => {
                 assert_eq!(rf.code, al_diagnostics::ErrorCode::Escalated);
@@ -2831,11 +2667,11 @@ mod tests {
         let mut interp = Interpreter::new();
         interp.load_program(&program);
         let _ = interp.run_operation("test", vec![]);
-        assert!(
-            interp.runtime.audit_log.iter().any(|e| {
-                e.event_type == al_diagnostics::AuditEventType::Escalated
-            })
-        );
+        assert!(interp
+            .runtime
+            .audit_log
+            .iter()
+            .any(|e| { e.event_type == al_diagnostics::AuditEventType::Escalated }));
     }
 
     // =================================================================
@@ -2877,19 +2713,16 @@ mod tests {
         let result = interp.run_operation("test", vec![]).unwrap();
         assert_eq!(result, Value::Int(42));
         // No ASSERT_FAILED audit events.
-        assert!(
-            !interp.runtime.audit_log.iter().any(|e| {
-                e.event_type == al_diagnostics::AuditEventType::AssertFailed
-            })
-        );
+        assert!(!interp
+            .runtime
+            .audit_log
+            .iter()
+            .any(|e| { e.event_type == al_diagnostics::AuditEventType::AssertFailed }));
     }
 
     #[test]
     fn assert_false_emits_audit_with_vc_id() {
-        let program = al_parser::parse(
-            "OPERATION test => BODY { ASSERT FALSE }",
-        )
-        .unwrap();
+        let program = al_parser::parse("OPERATION test => BODY { ASSERT FALSE }").unwrap();
         let mut interp = Interpreter::new();
         interp.load_program(&program);
         let _ = interp.run_operation("test", vec![]);
@@ -3319,7 +3152,9 @@ mod tests {
         // Should have PIPELINE_STARTED and OPERATION_CALLED events.
         let events = &interp.runtime.audit_log;
         assert!(
-            events.iter().any(|e| e.event_type == AuditEventType::PipelineStarted),
+            events
+                .iter()
+                .any(|e| e.event_type == AuditEventType::PipelineStarted),
             "expected PIPELINE_STARTED audit event"
         );
     }
@@ -3449,8 +3284,14 @@ mod tests {
         assert_eq!(
             result,
             Value::List(vec![
-                Value::Int(1), Value::Int(1), Value::Int(2), Value::Int(3),
-                Value::Int(4), Value::Int(5), Value::Int(6), Value::Int(9),
+                Value::Int(1),
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(4),
+                Value::Int(5),
+                Value::Int(6),
+                Value::Int(9),
             ])
         );
     }
@@ -3537,10 +3378,7 @@ mod tests {
             OPERATION test => BODY { EMIT TAKE([1, 2], 5) }
         "#;
         let result = run_op(src, "test", vec![]).unwrap();
-        assert_eq!(
-            result,
-            Value::List(vec![Value::Int(1), Value::Int(2)])
-        );
+        assert_eq!(result, Value::List(vec![Value::Int(1), Value::Int(2)]));
     }
 
     #[test]
@@ -3863,7 +3701,10 @@ mod tests {
 
         let _ = interp.runtime.resume_checkpoint(&cp_id).unwrap();
 
-        let event_types: Vec<_> = interp.runtime.audit_log.iter()
+        let event_types: Vec<_> = interp
+            .runtime
+            .audit_log
+            .iter()
             .map(|e| e.event_type)
             .collect();
         assert!(event_types.contains(&AuditEventType::CheckpointCreated));
@@ -3887,7 +3728,10 @@ mod tests {
 
         // Verify effect was recorded
         assert!(!interp.runtime.effect_journal.entries().is_empty());
-        assert_eq!(interp.runtime.effect_journal.entries()[0].idempotency_key, "read:file.txt");
+        assert_eq!(
+            interp.runtime.effect_journal.entries()[0].idempotency_key,
+            "read:file.txt"
+        );
     }
 
     #[test]
@@ -3901,7 +3745,10 @@ mod tests {
         interp.load_program(&program);
         let _ = interp.run().unwrap();
 
-        let event_types: Vec<_> = interp.runtime.audit_log.iter()
+        let event_types: Vec<_> = interp
+            .runtime
+            .audit_log
+            .iter()
             .map(|e| e.event_type)
             .collect();
         assert!(event_types.contains(&AuditEventType::EffectRecorded));
@@ -3937,7 +3784,10 @@ mod tests {
         let mut interp = Interpreter::new();
         interp.runtime.record_effect("test-key", "test desc");
 
-        let events: Vec<_> = interp.runtime.audit_log.iter()
+        let events: Vec<_> = interp
+            .runtime
+            .audit_log
+            .iter()
             .filter(|e| e.event_type == AuditEventType::EffectRecorded)
             .collect();
         assert_eq!(events.len(), 1);
@@ -3957,7 +3807,10 @@ mod tests {
         );
         let _ = interp.runtime.resume_checkpoint(&cp_id).unwrap();
 
-        let events: Vec<_> = interp.runtime.audit_log.iter()
+        let events: Vec<_> = interp
+            .runtime
+            .audit_log
+            .iter()
             .filter(|e| e.event_type == AuditEventType::CheckpointResumed)
             .collect();
         assert_eq!(events.len(), 1);
@@ -3982,8 +3835,8 @@ mod tests {
         assert!(jsonl_lines.len() >= 3);
         for line in &jsonl_lines {
             assert!(!line.contains('\n'), "JSONL line must not contain newlines");
-            let parsed: serde_json::Value = serde_json::from_str(line)
-                .expect("each JSONL line must be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(line).expect("each JSONL line must be valid JSON");
             assert!(parsed["event_id"].is_string());
             assert!(parsed["timestamp"].is_string());
             assert!(parsed["event_type"].is_string());

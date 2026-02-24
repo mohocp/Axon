@@ -20,9 +20,9 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use al_diagnostics::{Diagnostic, ErrorCode, Span, WarningCode};
 #[cfg(test)]
 use al_diagnostics::Severity;
+use al_diagnostics::{Diagnostic, ErrorCode, Span, WarningCode};
 use serde::{Deserialize, Serialize};
 
 // ===========================================================================
@@ -207,7 +207,7 @@ impl CapabilitySet {
     }
 
     /// Create a capability set from an iterator of capabilities.
-    pub fn from_iter(iter: impl IntoIterator<Item = Capability>) -> Self {
+    pub fn collect_from(iter: impl IntoIterator<Item = Capability>) -> Self {
         Self {
             inner: iter.into_iter().collect(),
         }
@@ -635,8 +635,10 @@ pub fn check_capability(caps: &CapabilitySet, required: Capability) -> Result<()
     if caps.contains(&required) {
         Ok(())
     } else {
-        let mut available: Vec<String> =
-            caps.iter().map(|c| c.canonical_name().to_string()).collect();
+        let mut available: Vec<String> = caps
+            .iter()
+            .map(|c| c.canonical_name().to_string())
+            .collect();
         available.sort_unstable();
         Err(CapabilityError::Missing {
             required,
@@ -724,7 +726,11 @@ mod tests {
                 cap.canonical_name()
             );
         }
-        assert_eq!(names.len(), 22, "expected exactly 22 canonical capabilities");
+        assert_eq!(
+            names.len(),
+            22,
+            "expected exactly 22 canonical capabilities"
+        );
     }
 
     #[test]

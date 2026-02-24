@@ -198,14 +198,10 @@ pub enum Statement {
     },
 
     /// `EMIT [expr] ;`
-    Emit {
-        value: Option<Spanned<Expr>>,
-    },
+    Emit { value: Option<Spanned<Expr>> },
 
     /// `ASSERT expr ;`
-    Assert {
-        condition: Spanned<Expr>,
-    },
+    Assert { condition: Spanned<Expr> },
 
     /// `RETRY(count [, args]) ;`
     Retry {
@@ -214,14 +210,10 @@ pub enum Statement {
     },
 
     /// `ESCALATE [( expr )] ;`
-    Escalate {
-        message: Option<Spanned<Expr>>,
-    },
+    Escalate { message: Option<Spanned<Expr>> },
 
     /// `CHECKPOINT ["label"] ;`
-    Checkpoint {
-        label: Option<Spanned<String>>,
-    },
+    Checkpoint { label: Option<Spanned<String>> },
 
     /// `HALT(reason [, expr]) ;`
     Halt {
@@ -237,9 +229,7 @@ pub enum Statement {
     },
 
     /// A bare expression used as a statement: `expr ;`
-    Expr {
-        expr: Spanned<Expr>,
-    },
+    Expr { expr: Spanned<Expr> },
 }
 
 // ---------------------------------------------------------------------------
@@ -336,9 +326,7 @@ pub enum Expr {
     },
 
     /// `expr?`  — confidence query postfix.
-    Confidence {
-        expr: Box<Spanned<Expr>>,
-    },
+    Confidence { expr: Box<Spanned<Expr>> },
 
     /// `start..end`
     Range {
@@ -360,24 +348,16 @@ pub enum Expr {
     },
 
     /// `RESUME(expr)`
-    Resume {
-        expr: Box<Spanned<Expr>>,
-    },
+    Resume { expr: Box<Spanned<Expr>> },
 
     /// `[a, b, c]`
-    List {
-        elements: Vec<Spanned<Expr>>,
-    },
+    List { elements: Vec<Spanned<Expr>> },
 
     /// `{ "key": value, ... }`  or  `{ ident: value, ... }`
-    Map {
-        items: Vec<Spanned<MapItem>>,
-    },
+    Map { items: Vec<Spanned<MapItem>> },
 
     /// Parenthesised expression `( expr )`.
-    Paren {
-        inner: Box<Spanned<Expr>>,
-    },
+    Paren { inner: Box<Spanned<Expr>> },
 }
 
 // ---------------------------------------------------------------------------
@@ -545,14 +525,10 @@ pub enum TypeExpr {
     },
 
     /// An inline record type: `{ name: Str, age: Int64 }`.
-    Record {
-        fields: Vec<Spanned<FieldType>>,
-    },
+    Record { fields: Vec<Spanned<FieldType>> },
 
     /// A union type: `Success | Failure`.
-    Union {
-        types: Vec<Spanned<TypeExpr>>,
-    },
+    Union { types: Vec<Spanned<TypeExpr>> },
 
     /// A constrained type: `Int64 :: range(0, 100)`.
     Constrained {

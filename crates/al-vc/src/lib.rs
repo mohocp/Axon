@@ -129,7 +129,9 @@ impl VcGenerator {
             Statement::Assert { condition } => {
                 out.push(self.make_vc(operation, VcOrigin::Assert { synthetic: false }, condition));
             }
-            Statement::Match { arms, otherwise, .. } => {
+            Statement::Match {
+                arms, otherwise, ..
+            } => {
                 for arm in arms {
                     if let MatchBody::Block(block) = &arm.node.body.node {
                         for nested in &block.node.stmts {
@@ -458,8 +460,9 @@ OPERATION Verify =>
         let rewrites = apply_vc_results(&vcs, &mut hir, &mut sink);
         assert!(rewrites.is_empty());
         assert!(sink.has_errors());
-        assert!(sink.errors().iter().any(|d| {
-            d.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::VcInvalid)
-        }));
+        assert!(sink
+            .errors()
+            .iter()
+            .any(|d| { d.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::VcInvalid) }));
     }
 }

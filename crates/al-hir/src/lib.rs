@@ -83,21 +83,67 @@ pub enum HirDeclaration {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirStatement {
-    Assert { condition: HirExpr, meta: HirMeta },
-    Retry { count: u64, meta: HirMeta },
-    Escalate { message: Option<String>, meta: HirMeta },
-    Checkpoint { label: Option<String>, meta: HirMeta },
-    Resume { expr: HirExpr, meta: HirMeta },
-    Fork { branches: Vec<HirBranch>, meta: HirMeta },
-    Delegate { task: String, target: String, meta: HirMeta },
-    Store { name: String, meta: HirMeta },
-    Mutable { name: String, reason: String, meta: HirMeta },
-    Assign { target: String, meta: HirMeta },
-    Match { arm_count: usize, has_otherwise: bool, meta: HirMeta },
-    Loop { max_iters: u64, meta: HirMeta },
-    Emit { meta: HirMeta },
-    Halt { reason: String, meta: HirMeta },
-    Expr { meta: HirMeta },
+    Assert {
+        condition: HirExpr,
+        meta: HirMeta,
+    },
+    Retry {
+        count: u64,
+        meta: HirMeta,
+    },
+    Escalate {
+        message: Option<String>,
+        meta: HirMeta,
+    },
+    Checkpoint {
+        label: Option<String>,
+        meta: HirMeta,
+    },
+    Resume {
+        expr: HirExpr,
+        meta: HirMeta,
+    },
+    Fork {
+        branches: Vec<HirBranch>,
+        meta: HirMeta,
+    },
+    Delegate {
+        task: String,
+        target: String,
+        meta: HirMeta,
+    },
+    Store {
+        name: String,
+        meta: HirMeta,
+    },
+    Mutable {
+        name: String,
+        reason: String,
+        meta: HirMeta,
+    },
+    Assign {
+        target: String,
+        meta: HirMeta,
+    },
+    Match {
+        arm_count: usize,
+        has_otherwise: bool,
+        meta: HirMeta,
+    },
+    Loop {
+        max_iters: u64,
+        meta: HirMeta,
+    },
+    Emit {
+        meta: HirMeta,
+    },
+    Halt {
+        reason: String,
+        meta: HirMeta,
+    },
+    Expr {
+        meta: HirMeta,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -300,9 +346,7 @@ fn lower_expr(expr: &Expr, span: Span) -> HirExpr {
         Expr::List { elements } => HirExprKind::List {
             count: elements.len(),
         },
-        Expr::Map { items } => HirExprKind::Map {
-            count: items.len(),
-        },
+        Expr::Map { items } => HirExprKind::Map { count: items.len() },
         _ => HirExprKind::Other,
     };
 

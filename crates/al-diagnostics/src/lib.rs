@@ -801,10 +801,7 @@ mod tests {
         );
 
         let json_val: serde_json::Value = serde_json::to_value(&event).unwrap();
-        assert_eq!(
-            json_val["event_id"],
-            "550e8400-e29b-41d4-a716-446655440000"
-        );
+        assert_eq!(json_val["event_id"], "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(json_val["timestamp"], "2026-02-24T12:00:00Z");
         assert_eq!(json_val["agent_id"], "planner-agent");
         assert_eq!(json_val["task_id"], "task-42");

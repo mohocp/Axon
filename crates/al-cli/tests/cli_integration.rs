@@ -48,7 +48,11 @@ PIPELINE Main => produce -> double
 "#;
     let (stdout, _stderr, code) = run_cli_source(source);
     assert_eq!(code, 0, "exit code should be 0");
-    assert!(stdout.contains("Result: 84"), "expected 84 in output: {}", stdout);
+    assert!(
+        stdout.contains("Result: 84"),
+        "expected 84 in output: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -73,7 +77,11 @@ PIPELINE Main => produce -> factorial
 "#;
     let (stdout, _stderr, code) = run_cli_source(source);
     assert_eq!(code, 0);
-    assert!(stdout.contains("Result: 120"), "expected 120 in output: {}", stdout);
+    assert!(
+        stdout.contains("Result: 120"),
+        "expected 120 in output: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -109,7 +117,10 @@ OPERATION unreachable =>
 PIPELINE Main => fail_op -> unreachable
 "#;
     let (stdout, _stderr, code) = run_cli_source(source);
-    assert_eq!(code, 0, "HALT inside operation produces FAILURE value, not crash");
+    assert_eq!(
+        code, 0,
+        "HALT inside operation produces FAILURE value, not crash"
+    );
     assert!(
         stdout.contains("FAILURE"),
         "expected FAILURE in output: {}",
@@ -219,7 +230,10 @@ OPERATION test =>
 PIPELINE Main => test
 "#;
     let (stdout, _stderr, code) = run_cli_source(source);
-    assert_eq!(code, 0, "fork/join failure produces FAILURE value, not crash");
+    assert_eq!(
+        code, 0,
+        "fork/join failure produces FAILURE value, not crash"
+    );
     assert!(
         stdout.contains("FORK_JOIN_FAILED"),
         "expected FORK_JOIN_FAILED in output: {}",

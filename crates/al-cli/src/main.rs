@@ -75,10 +75,7 @@ fn cmd_lex(path: &str) {
     match al_lexer::tokenize(&source) {
         Ok(tokens) => {
             for tok in &tokens {
-                println!(
-                    "  {}:{} {}",
-                    tok.span.line, tok.span.column, tok.token
-                );
+                println!("  {}:{} {}", tok.span.line, tok.span.column, tok.token);
             }
             println!("OK: {} tokens", tokens.len());
         }
@@ -108,11 +105,7 @@ fn cmd_parse(path: &str) {
                         println!("  SCHEMA {} ({} fields)", name.node, fields.len());
                     }
                     al_ast::Declaration::AgentDecl { name, properties } => {
-                        println!(
-                            "  AGENT {} ({} properties)",
-                            name.node,
-                            properties.len()
-                        );
+                        println!("  AGENT {} ({} properties)", name.node, properties.len());
                     }
                     al_ast::Declaration::OperationDecl { name, body, .. } => {
                         println!(
@@ -236,7 +229,10 @@ fn cmd_run(path: &str) {
     println!("Phase 3 (check): passed");
 
     // Phase 4: Capability check (static)
-    println!("Phase 4 (caps):  {} agents registered", checker.env.agents.len());
+    println!(
+        "Phase 4 (caps):  {} agents registered",
+        checker.env.agents.len()
+    );
 
     // Phase 5: Execute
     let mut interp = al_runtime::interpreter::Interpreter::new();

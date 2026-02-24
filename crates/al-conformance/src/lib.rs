@@ -210,7 +210,8 @@ TYPE Foo = Str
         // C11: Match arm body — statement keywords directly after ->
         Fixture {
             id: "C11",
-            description: "Match arm body supports statement keywords (EMIT, ESCALATE, etc.) after ->",
+            description:
+                "Match arm body supports statement keywords (EMIT, ESCALATE, etc.) after ->",
             source: r#"OPERATION HandleResult =>
   INPUT result: Result[Int64]
   BODY {
