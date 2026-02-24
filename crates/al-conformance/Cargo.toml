@@ -13,6 +13,7 @@ al-hir = { path = "../al-hir" }
 al-vc = { path = "../al-vc" }
 al-capabilities = { path = "../al-capabilities" }
 al-runtime = { path = "../al-runtime" }
+al-checkpoint = { path = "../al-checkpoint" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

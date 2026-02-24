@@ -609,6 +609,231 @@ OPERATION Guarded =>
 }
 
 // ===========================================================================
+// C1 strengthening: additional positive/negative tests
+// ===========================================================================
+
+#[test]
+fn c1_all_declaration_types_parse() {
+    // Comprehensive source with all 5 declaration types
+    let source = r#"
+TYPE Id = Int64
+SCHEMA Item => { name: Str, value: Float64 }
+AGENT Worker => CAPABILITIES [FILE_READ]
+OPERATION Process =>
+  INPUT item: Item
+  OUTPUT Int64
+  BODY { EMIT 42 }
+PIPELINE Flow => fetch -> transform -> store
+"#;
+    let program = parse_source(source).expect("all decl types should parse");
+    assert_eq!(program.declarations.len(), 5);
+}
+
+#[test]
+fn c1_negative_invalid_keyword_as_identifier() {
+    // Using a keyword where an identifier is expected should fail
+    let result = parse_source("TYPE BODY = Int64");
+    assert!(result.is_err(), "C1: keyword as type name should fail");
+}
+
+// ===========================================================================
+// C2 strengthening: FAILURE arity negative test
+// ===========================================================================
+
+#[test]
+fn c2_failure_2_fields_rejected() {
+    // FAILURE with only 2 fields should fail to parse (grammar requires 3)
+    let source = r#"OPERATION Test =>
+  INPUT r: Result[Int64]
+  BODY {
+    MATCH r => {
+      WHEN FAILURE(code, msg) -> { EMIT 0 }
+    }
+  }
+"#;
+    let result = parse_source(source);
+    // Parser enforces 3-field FAILURE; 2 fields should error
+    assert!(result.is_err(), "C2: 2-field FAILURE should fail to parse");
+}
+
+// ===========================================================================
+// C3 strengthening: capability alias normalization (C9 overlap)
+// ===========================================================================
+
+#[test]
+fn c3_multiple_agents_with_capabilities() {
+    let source = r#"
+AGENT Reader => CAPABILITIES [FILE_READ] DENY [FILE_WRITE]
+AGENT Writer => CAPABILITIES [FILE_WRITE, API_CALL]
+"#;
+    let program = parse_source(source).expect("multiple agents should parse");
+    assert_eq!(program.declarations.len(), 2);
+    let checker = check_source(source).expect("should typecheck");
+    assert!(!checker.has_errors());
+}
+
+// ===========================================================================
+// C4 strengthening: fork/join negative test
+// ===========================================================================
+
+#[test]
+fn c4_non_mvp_join_strategy_rejected() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C17").unwrap();
+    assert!(
+        !fixture.should_parse,
+        "C17 fixture should be negative"
+    );
+    let result = parse_source(fixture.source);
+    assert!(
+        result.is_err(),
+        "C4/C17: BEST_EFFORT join strategy should be rejected"
+    );
+}
+
+// ===========================================================================
+// C5 strengthening: checkpoint/resume round-trip
+// ===========================================================================
+
+#[test]
+fn c5_checkpoint_resume_full() {
+    use al_checkpoint::{simple_hash, Checkpoint, CheckpointMeta, EffectJournal};
+
+    let state = serde_json::json!({"registers": {"x": 42}});
+    let hash = simple_hash(&serde_json::to_string(&state).unwrap());
+    let cp = Checkpoint {
+        meta: CheckpointMeta {
+            checkpoint_id: "cp-test".into(),
+            created_at: "2026-02-24T00:00:00Z".into(),
+            profile: "mvp-0.1".into(),
+            schema_version: "1".into(),
+            hash,
+        },
+        state: state.clone(),
+        effect_journal: vec![],
+    };
+    let json = cp.to_json().expect("should serialize");
+    let restored = Checkpoint::from_json(&json).expect("should deserialize");
+    assert_eq!(cp.state, restored.state);
+    assert_eq!(cp.meta.profile, restored.meta.profile);
+    assert!(restored.validate_hash(), "hash should validate after roundtrip");
+
+    // Effect journal idempotency
+    let mut journal = EffectJournal::new();
+    assert!(journal.record_effect("eff-1", "write file"));
+    assert!(!journal.record_effect("eff-1", "write file")); // duplicate
+    journal.commit_effect("eff-1");
+    assert!(journal.is_committed("eff-1"));
+}
+
+// ===========================================================================
+// C8 strengthening: excluded features
+// ===========================================================================
+
+#[test]
+fn c8_malformed_failure_arity_rejected() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C15").unwrap();
+    let result = parse_source(fixture.source);
+    assert!(result.is_err(), "C8/C15: 2-field FAILURE should be rejected");
+}
+
+#[test]
+fn c8_partial_join_rejected() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C16").unwrap();
+    let result = parse_source(fixture.source);
+    assert!(result.is_err(), "C8/C16: PARTIAL join should be rejected");
+}
+
+// ===========================================================================
+// C9 strengthening: duplicate definitions
+// ===========================================================================
+
+#[test]
+fn c9_duplicate_schema_detected() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C18").unwrap();
+    let checker = check_source(fixture.source).expect("should parse");
+    assert!(
+        checker.has_errors(),
+        "C9/C18: duplicate schema should produce error"
+    );
+}
+
+#[test]
+fn c9_duplicate_agent_detected() {
+    let source = r#"AGENT Worker => CAPABILITIES [FILE_READ]
+AGENT Worker => CAPABILITIES [API_CALL]"#;
+    let checker = check_source(source).expect("should parse");
+    assert!(checker.has_errors(), "C9: duplicate agent should error");
+}
+
+#[test]
+fn c9_duplicate_pipeline_detected() {
+    let source = r#"PIPELINE Flow => a -> b
+PIPELINE Flow => c -> d"#;
+    let checker = check_source(source).expect("should parse");
+    assert!(checker.has_errors(), "C9: duplicate pipeline should error");
+}
+
+// ===========================================================================
+// C10 strengthening: retry/escalate additional coverage
+// ===========================================================================
+
+#[test]
+fn c10_retry_exhausted_returns_failure() {
+    use al_diagnostics::{ErrorCode, RuntimeFailure};
+    use al_runtime::Runtime;
+
+    let mut rt = Runtime::new();
+
+    // All retries fail -> should return error
+    let result = rt.execute_retry(3, |_| {
+        Err(RuntimeFailure::new(ErrorCode::NotImplemented, "always fail"))
+    });
+    assert!(result.is_err(), "C10: exhausted retries should return failure");
+}
+
+#[test]
+fn c10_escalation_with_audit_details() {
+    use al_capabilities::CapabilitySet;
+    use al_diagnostics::AuditEventType;
+    use al_runtime::Runtime;
+
+    let mut rt = Runtime::new();
+    rt.register_agent("agent-esc", CapabilitySet::empty());
+
+    let failure = rt.execute_escalate(Some("service unavailable".into()), "agent-esc");
+    assert_eq!(failure.message, "service unavailable");
+    assert_eq!(rt.audit_log.last().unwrap().event_type, AuditEventType::Escalated);
+    assert_eq!(
+        rt.audit_log.last().unwrap().details["message"],
+        "service unavailable"
+    );
+}
+
+// ===========================================================================
+// C19: ENSURE clause (positive)
+// ===========================================================================
+
+#[test]
+fn c19_ensure_clause_accepted() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C19").unwrap();
+    let checker = check_source(fixture.source).expect("C19: should parse");
+    assert!(!checker.has_errors(), "C19: ENSURE clause should typecheck");
+}
+
+// ===========================================================================
+// C20: INVARIANT in OPERATION (positive)
+// ===========================================================================
+
+#[test]
+fn c20_operation_invariant_accepted() {
+    let fixture = all_fixtures().into_iter().find(|f| f.id == "C20").unwrap();
+    let program = parse_source(fixture.source).expect("C20: should parse");
+    assert_eq!(program.declarations.len(), 1);
+    let checker = check_source(fixture.source).expect("C20: should typecheck");
+    assert!(!checker.has_errors(), "C20: INVARIANT should typecheck");
+}
+
+// ===========================================================================
 // Cross-cutting: all fixtures parse
 // ===========================================================================
 

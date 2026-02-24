@@ -262,5 +262,90 @@ TYPE Valid2 = Str
             should_typecheck: true,
             expected_declarations: Some(1),
         },
+        // ── Negative conformance fixtures (C15+) ──────────────────────
+        // C15: Malformed FAILURE pattern (2 fields instead of 3)
+        Fixture {
+            id: "C15",
+            description: "FAILURE pattern with only 2 fields must be rejected by parser",
+            source: r#"OPERATION Test =>
+  INPUT r: Result[Int64]
+  BODY {
+    MATCH r => {
+      WHEN FAILURE(code, msg) -> { EMIT 0 }
+    }
+  }
+"#,
+            should_parse: false,
+            should_typecheck: false,
+            expected_declarations: None,
+        },
+        // C16: PARTIAL join strategy (excluded)
+        Fixture {
+            id: "C16",
+            description: "PARTIAL join strategy is not in MVP and must be rejected",
+            source: r#"OPERATION PartialOp =>
+  BODY {
+    STORE results = FORK { a: fetch } -> JOIN strategy: PARTIAL
+    EMIT results
+  }
+"#,
+            should_parse: false,
+            should_typecheck: false,
+            expected_declarations: None,
+        },
+        // C17: Non-MVP join strategy (BEST_EFFORT rejected)
+        Fixture {
+            id: "C17",
+            description: "BEST_EFFORT join strategy is not in MVP and must be rejected",
+            source: r#"OPERATION ParallelOp =>
+  BODY {
+    STORE results = FORK { a: fetch } -> JOIN strategy: BEST_EFFORT
+    EMIT results
+  }
+"#,
+            should_parse: false,
+            should_typecheck: false,
+            expected_declarations: None,
+        },
+        // C18: Duplicate schema definition
+        Fixture {
+            id: "C18",
+            description: "Duplicate schema definitions are rejected by type checker",
+            source: r#"SCHEMA User => { name: Str }
+SCHEMA User => { age: Int64 }
+"#,
+            should_parse: true,
+            should_typecheck: false,
+            expected_declarations: Some(2),
+        },
+        // C19: ENSURE clause in operation (positive)
+        Fixture {
+            id: "C19",
+            description: "ENSURE postcondition clause is accepted",
+            source: r#"OPERATION Guarded =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  ENSURE x GT 0
+  BODY { EMIT x }
+"#,
+            should_parse: true,
+            should_typecheck: true,
+            expected_declarations: Some(1),
+        },
+        // C20: INVARIANT in OPERATION declaration (positive)
+        Fixture {
+            id: "C20",
+            description: "INVARIANT clause in OPERATION is accepted",
+            source: r#"OPERATION Counter =>
+  INPUT count: Int64
+  INVARIANT count GTE 0
+  BODY {
+    EMIT count
+  }
+"#,
+            should_parse: true,
+            should_typecheck: true,
+            expected_declarations: Some(1),
+        },
     ]
 }
