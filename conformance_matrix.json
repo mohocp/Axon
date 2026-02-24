@@ -1,0 +1,270 @@
+{
+  "profile": "mvp-0.1",
+  "version": "0.1.0-rc1",
+  "date": "2026-02-24",
+  "result": "CONFORMANT",
+  "summary": {
+    "total": 20,
+    "pass": 20,
+    "fail": 0,
+    "skip": 0
+  },
+  "test_count": 45,
+  "requirements": [
+    {
+      "id": "C1",
+      "description": "Lex/parse round-trip: all MVP grammar constructs",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c1_lex_parse_roundtrip",
+        "c1_all_declaration_types_parse",
+        "c1_tokens_have_spans",
+        "c1_empty_source_parses",
+        "c1_negative_invalid_keyword_as_identifier"
+      ]
+    },
+    {
+      "id": "C2",
+      "description": "FAILURE arity: 3-field canonical form enforced",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c2_failure_arity_3_fields",
+        "c2_failure_2_fields_rejected"
+      ]
+    },
+    {
+      "id": "C3",
+      "description": "Capability deny: agent CAPABILITIES/DENY/TRUST_LEVEL",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c3_capability_deny",
+        "c3_capability_runtime_check",
+        "c3_multiple_agents_with_capabilities"
+      ]
+    },
+    {
+      "id": "C4",
+      "description": "Fork/join: ALL_COMPLETE only; BEST_EFFORT/PARTIAL rejected",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c4_fork_join_parse",
+        "c4_fork_join_runtime",
+        "c4_non_mvp_join_strategy_rejected"
+      ]
+    },
+    {
+      "id": "C5",
+      "description": "Checkpoint/resume: CHECKPOINT and RESUME statements",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c5_checkpoint_parse",
+        "c5_checkpoint_runtime",
+        "c5_checkpoint_resume_full"
+      ]
+    },
+    {
+      "id": "C6",
+      "description": "Pipeline composition: arrow and pipe-forward operators",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c6_pipeline_parse"
+      ]
+    },
+    {
+      "id": "C7",
+      "description": "Audit trail: ASSERT/REQUIRE/ENSURE with VC generation",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c7_audit_assert_parse",
+        "c7_audit_runtime",
+        "c7_vc_generation_from_require_ensure_assert",
+        "c7_vc_invalid_emits_compile_error",
+        "c7_vc_unknown_rewrite_is_synthetic_assert"
+      ]
+    },
+    {
+      "id": "C8",
+      "description": "Excluded features: non-MVP constructs rejected",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c8_valid_mvp_subset",
+        "c8_profile_is_mvp",
+        "c8_malformed_failure_arity_rejected",
+        "c8_partial_join_rejected"
+      ]
+    },
+    {
+      "id": "C9",
+      "description": "Type checking: duplicate definitions detected",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": false,
+      "status": "PASS",
+      "tests": [
+        "c9_duplicate_type_detected",
+        "c9_duplicate_schema_detected",
+        "c9_duplicate_operation_detected",
+        "c9_duplicate_pipeline_detected",
+        "c9_duplicate_agent_detected"
+      ]
+    },
+    {
+      "id": "C10",
+      "description": "Retry/escalation: RETRY(n) and ESCALATE semantics",
+      "category": "core",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c10_retry_escalate_parse",
+        "c10_retry_runtime",
+        "c10_retry_exhausted_returns_failure",
+        "c10_escalation_runtime",
+        "c10_escalation_with_audit_details"
+      ]
+    },
+    {
+      "id": "C11",
+      "description": "Match arm body: statement keywords after ->",
+      "category": "extended_positive",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c11_match_body_statement_keywords"
+      ]
+    },
+    {
+      "id": "C12",
+      "description": "Undefined type reference: type checker rejects unknown types",
+      "category": "extended_positive",
+      "should_parse": true,
+      "should_typecheck": false,
+      "status": "PASS",
+      "tests": [
+        "c12_undefined_type_detected",
+        "c12_builtin_types_resolve"
+      ]
+    },
+    {
+      "id": "C13",
+      "description": "Parser error recovery: continues after syntax errors",
+      "category": "extended_positive",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c13_parser_recovery"
+      ]
+    },
+    {
+      "id": "C14",
+      "description": "REQUIRE clause: validates references to operation inputs",
+      "category": "extended_positive",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c14_require_valid_input_reference",
+        "c14_require_unknown_identifier"
+      ]
+    },
+    {
+      "id": "C15",
+      "description": "Malformed FAILURE pattern (2 fields) rejected by parser",
+      "category": "negative",
+      "should_parse": false,
+      "should_typecheck": false,
+      "status": "PASS",
+      "tests": [
+        "c2_failure_2_fields_rejected"
+      ]
+    },
+    {
+      "id": "C16",
+      "description": "PARTIAL join strategy rejected (not in MVP)",
+      "category": "negative",
+      "should_parse": false,
+      "should_typecheck": false,
+      "status": "PASS",
+      "tests": [
+        "c8_partial_join_rejected"
+      ]
+    },
+    {
+      "id": "C17",
+      "description": "BEST_EFFORT join strategy rejected (not in MVP)",
+      "category": "negative",
+      "should_parse": false,
+      "should_typecheck": false,
+      "status": "PASS",
+      "tests": [
+        "c4_non_mvp_join_strategy_rejected"
+      ]
+    },
+    {
+      "id": "C18",
+      "description": "Duplicate schema definition rejected by type checker",
+      "category": "negative",
+      "should_parse": true,
+      "should_typecheck": false,
+      "status": "PASS",
+      "tests": [
+        "c9_duplicate_schema_detected"
+      ]
+    },
+    {
+      "id": "C19",
+      "description": "ENSURE postcondition clause accepted in operations",
+      "category": "extended_positive",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c19_ensure_clause_accepted"
+      ]
+    },
+    {
+      "id": "C20",
+      "description": "INVARIANT clause in OPERATION accepted",
+      "category": "extended_positive",
+      "should_parse": true,
+      "should_typecheck": true,
+      "status": "PASS",
+      "tests": [
+        "c20_operation_invariant_accepted"
+      ]
+    }
+  ],
+  "governing_specs": [
+    "specs/MVP_PROFILE.md",
+    "specs/GRAMMAR_MVP.ebnf",
+    "specs/formal_semantics.md",
+    "specs/stdlib_spec_mvp.md",
+    "specs/CONFORMANCE_ACCEPTANCE_CRITERIA.md"
+  ]
+}

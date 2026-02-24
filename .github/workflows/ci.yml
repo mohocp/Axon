@@ -52,7 +52,7 @@ jobs:
       - run: cargo test --workspace
 
   conformance:
-    name: Conformance (C1-C10)
+    name: Conformance (C1-C20)
     runs-on: ubuntu-latest
     needs: build
     steps:
