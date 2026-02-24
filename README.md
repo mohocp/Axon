@@ -20,33 +20,45 @@ AgentLang provides first-class primitives for defining autonomous agents, their 
 cargo build --workspace
 ```
 
+### Install (pre-built binary)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mohammedabuhalib/agentlang/main/install.sh | sh
+```
+
+Or build from source:
+
+```bash
+cargo install --path crates/al-cli
+```
+
 ### Run an Example
 
 ```bash
 # Execute a pipeline
-cargo run -p al-cli -- run examples/calculate.al
+al run examples/calculate.al
 
 # Factorial with loops
-cargo run -p al-cli -- run examples/factorial.al
+al run examples/factorial.al
 
 # Pattern matching on Result types
-cargo run -p al-cli -- run examples/match_result.al
+al run examples/match_result.al
 ```
 
 ### CLI Commands
 
 ```bash
 # Tokenize a source file
-al-cli lex <file.al>
+al lex <file.al>
 
 # Parse and print AST summary
-al-cli parse <file.al>
+al parse <file.al>
 
 # Type-check a source file
-al-cli check <file.al>
+al check <file.al>
 
 # Full pipeline: lex -> parse -> check -> execute
-al-cli run <file.al>
+al run <file.al>
 ```
 
 ### Output Formats
@@ -54,9 +66,9 @@ al-cli run <file.al>
 All commands support `--format` for diagnostic output:
 
 ```bash
-al-cli run program.al --format human   # Human-readable (default)
-al-cli run program.al --format json    # JSON object
-al-cli run program.al --format jsonl   # JSON Lines
+al run program.al --format human   # Human-readable (default)
+al run program.al --format json    # JSON object
+al run program.al --format jsonl   # JSON Lines
 ```
 
 ### Run Tests

@@ -52,7 +52,7 @@ fn main() {
 
     if cli.command.is_empty() {
         eprintln!("AgentLang CLI v0.1 - MVP");
-        eprintln!("Usage: al-cli <command> [file.al] [--format human|json|jsonl]");
+        eprintln!("Usage: al <command> [file.al] [--format human|json|jsonl]");
         eprintln!();
         eprintln!("Commands:");
         eprintln!("  lex    <file>  Tokenize and print tokens");
@@ -65,28 +65,28 @@ fn main() {
     match cli.command.as_str() {
         "lex" => {
             let path = cli.file.as_deref().unwrap_or_else(|| {
-                eprintln!("Usage: al-cli lex <file.al>");
+                eprintln!("Usage: al lex <file.al>");
                 process::exit(1);
             });
             cmd_lex(path, cli.format);
         }
         "parse" => {
             let path = cli.file.as_deref().unwrap_or_else(|| {
-                eprintln!("Usage: al-cli parse <file.al>");
+                eprintln!("Usage: al parse <file.al>");
                 process::exit(1);
             });
             cmd_parse(path, cli.format);
         }
         "check" => {
             let path = cli.file.as_deref().unwrap_or_else(|| {
-                eprintln!("Usage: al-cli check <file.al>");
+                eprintln!("Usage: al check <file.al>");
                 process::exit(1);
             });
             cmd_check(path, cli.format);
         }
         "run" => {
             let path = cli.file.as_deref().unwrap_or_else(|| {
-                eprintln!("Usage: al-cli run <file.al>");
+                eprintln!("Usage: al run <file.al>");
                 process::exit(1);
             });
             cmd_run(path, cli.format);

@@ -1,4 +1,4 @@
-//! CLI integration tests for `al-cli run`.
+//! CLI integration tests for `al run`.
 //!
 //! These tests exercise the full lex → parse → check → execute pipeline
 //! through the CLI binary, verifying stdout output and exit codes.
@@ -19,7 +19,7 @@ fn run_cli_source(source: &str) -> (String, String, i32) {
     let file = dir.join(unique);
     std::fs::write(&file, source).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_al-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_al"))
         .args(["run", file.to_str().unwrap()])
         .output()
         .expect("failed to execute al-cli");

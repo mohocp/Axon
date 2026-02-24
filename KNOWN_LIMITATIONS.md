@@ -57,7 +57,7 @@ This document lists known limitations and deferred features in the v0.1.0-rc1 re
 ### L6. No REPL or Language Server
 - **Area:** Developer experience
 - **Impact:** Medium
-- **Description:** No interactive REPL or LSP server is provided. Development requires the batch CLI (`al-cli`).
+- **Description:** No interactive REPL or LSP server is provided. Development requires the batch CLI (`al`).
 - **Deferred to:** Post-MVP.
 
 ### L7. No Incremental Compilation
@@ -66,12 +66,11 @@ This document lists known limitations and deferred features in the v0.1.0-rc1 re
 - **Description:** Every invocation re-lexes, re-parses, and re-checks the entire source file. No caching of intermediate results.
 - **Deferred to:** Post-MVP (file-watching / session caching).
 
-### L8. CLI Binary Not Cross-Compiled
+### L8. CLI Binary Distribution (Resolved)
 - **Area:** Distribution
-- **Impact:** Low
-- **Description:** This RC ships as source only. Pre-built binaries for Linux/macOS/Windows are not provided.
-- **Workaround:** Build from source with `cargo build --release -p al-cli`.
-- **Deferred to:** GA release (CI cross-compilation matrix).
+- **Impact:** ~~Low~~ Resolved
+- **Description:** Pre-built binaries for Linux and macOS are now provided via GitHub Releases with automated CI cross-compilation. Install script available.
+- **Resolution:** Round 9 — `al` binary release automation + `install.sh`.
 
 ---
 
@@ -133,7 +132,7 @@ This document lists known limitations and deferred features in the v0.1.0-rc1 re
 | L5 | Runtime | Low | Deferred |
 | L6 | Tooling | Medium | Deferred |
 | L7 | Performance | Low | Deferred |
-| L8 | Distribution | Low | Source-only for RC |
+| L8 | Distribution | Resolved | Binary releases + install.sh |
 | L9 | Stdlib | Medium | Stub backends |
 | L10 | Stdlib | Medium | Stub LLM |
 | L11 | Stdlib | By design | Excluded modules |

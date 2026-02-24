@@ -3,6 +3,10 @@ name = "al-cli"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "al"
+path = "src/main.rs"
+
 [dependencies]
 al-diagnostics = { path = "../al-diagnostics" }
 al-ast = { path = "../al-ast" }
