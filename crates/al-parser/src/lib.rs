@@ -2553,38 +2553,66 @@ TYPE Count = Int64
 
         /// Strategy for valid type names (built-in types).
         fn builtin_type() -> impl Strategy<Value = &'static str> {
-            prop::sample::select(vec![
-                "Int64", "Float64", "Str", "Bool", "Int", "Float",
-            ])
+            prop::sample::select(vec!["Int64", "Float64", "Str", "Bool", "Int", "Float"])
         }
 
         /// Strategy for valid identifiers (lowercase, not keywords).
         fn ident() -> impl Strategy<Value = String> {
             "[a-z][a-z0-9]{0,8}".prop_filter("not a keyword", |s| {
-                !matches!(
-                    s.as_str(),
-                    "max" | "strategy" | "to"
-                )
+                !matches!(s.as_str(), "max" | "strategy" | "to")
             })
         }
 
         /// All AgentLang keywords to filter from random names.
         const KEYWORDS: &[&str] = &[
-            "TYPE", "SCHEMA", "AGENT", "OPERATION", "PIPELINE",
-            "BODY", "INPUT", "OUTPUT", "REQUIRE", "ENSURE",
-            "INVARIANT", "STORE", "MUTABLE", "MATCH", "WHEN",
-            "OTHERWISE", "LOOP", "EMIT", "ASSERT", "RETRY",
-            "ESCALATE", "CHECKPOINT", "RESUME", "HALT",
-            "DELEGATE", "TO", "FORK", "JOIN", "SUCCESS",
-            "FAILURE", "TRUE", "FALSE", "NONE", "AND", "OR",
-            "NOT", "EQ", "NEQ", "GT", "GTE", "LT", "LTE",
+            "TYPE",
+            "SCHEMA",
+            "AGENT",
+            "OPERATION",
+            "PIPELINE",
+            "BODY",
+            "INPUT",
+            "OUTPUT",
+            "REQUIRE",
+            "ENSURE",
+            "INVARIANT",
+            "STORE",
+            "MUTABLE",
+            "MATCH",
+            "WHEN",
+            "OTHERWISE",
+            "LOOP",
+            "EMIT",
+            "ASSERT",
+            "RETRY",
+            "ESCALATE",
+            "CHECKPOINT",
+            "RESUME",
+            "HALT",
+            "DELEGATE",
+            "TO",
+            "FORK",
+            "JOIN",
+            "SUCCESS",
+            "FAILURE",
+            "TRUE",
+            "FALSE",
+            "NONE",
+            "AND",
+            "OR",
+            "NOT",
+            "EQ",
+            "NEQ",
+            "GT",
+            "GTE",
+            "LT",
+            "LTE",
         ];
 
         /// Strategy for valid uppercase names that aren't keywords.
         fn safe_name() -> impl Strategy<Value = String> {
-            "[A-Z][a-z][a-zA-Z]{0,6}".prop_filter("not a keyword", |s| {
-                !KEYWORDS.contains(&s.as_str())
-            })
+            "[A-Z][a-z][a-zA-Z]{0,6}"
+                .prop_filter("not a keyword", |s| !KEYWORDS.contains(&s.as_str()))
         }
 
         proptest! {

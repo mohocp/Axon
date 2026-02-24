@@ -1549,21 +1549,54 @@ OPERATION Route =>
 
         /// All AgentLang keywords to filter.
         const KEYWORDS: &[&str] = &[
-            "TYPE", "SCHEMA", "AGENT", "OPERATION", "PIPELINE",
-            "BODY", "INPUT", "OUTPUT", "REQUIRE", "ENSURE",
-            "INVARIANT", "STORE", "MUTABLE", "MATCH", "WHEN",
-            "OTHERWISE", "LOOP", "EMIT", "ASSERT", "RETRY",
-            "ESCALATE", "CHECKPOINT", "RESUME", "HALT",
-            "DELEGATE", "TO", "FORK", "JOIN", "SUCCESS",
-            "FAILURE", "TRUE", "FALSE", "NONE", "AND", "OR",
-            "NOT", "EQ", "NEQ", "GT", "GTE", "LT", "LTE",
+            "TYPE",
+            "SCHEMA",
+            "AGENT",
+            "OPERATION",
+            "PIPELINE",
+            "BODY",
+            "INPUT",
+            "OUTPUT",
+            "REQUIRE",
+            "ENSURE",
+            "INVARIANT",
+            "STORE",
+            "MUTABLE",
+            "MATCH",
+            "WHEN",
+            "OTHERWISE",
+            "LOOP",
+            "EMIT",
+            "ASSERT",
+            "RETRY",
+            "ESCALATE",
+            "CHECKPOINT",
+            "RESUME",
+            "HALT",
+            "DELEGATE",
+            "TO",
+            "FORK",
+            "JOIN",
+            "SUCCESS",
+            "FAILURE",
+            "TRUE",
+            "FALSE",
+            "NONE",
+            "AND",
+            "OR",
+            "NOT",
+            "EQ",
+            "NEQ",
+            "GT",
+            "GTE",
+            "LT",
+            "LTE",
         ];
 
         /// Strategy for valid type names (uppercase start, not keywords).
         fn type_name() -> impl Strategy<Value = String> {
-            "[A-Z][a-z][a-zA-Z]{0,6}".prop_filter("not a keyword", |s| {
-                !KEYWORDS.contains(&s.as_str())
-            })
+            "[A-Z][a-z][a-zA-Z]{0,6}"
+                .prop_filter("not a keyword", |s| !KEYWORDS.contains(&s.as_str()))
         }
 
         proptest! {

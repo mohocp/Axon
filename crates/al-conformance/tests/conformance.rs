@@ -679,10 +679,7 @@ AGENT Writer => CAPABILITIES [FILE_WRITE, API_CALL]
 #[test]
 fn c4_non_mvp_join_strategy_rejected() {
     let fixture = all_fixtures().into_iter().find(|f| f.id == "C17").unwrap();
-    assert!(
-        !fixture.should_parse,
-        "C17 fixture should be negative"
-    );
+    assert!(!fixture.should_parse, "C17 fixture should be negative");
     let result = parse_source(fixture.source);
     assert!(
         result.is_err(),
@@ -715,7 +712,10 @@ fn c5_checkpoint_resume_full() {
     let restored = Checkpoint::from_json(&json).expect("should deserialize");
     assert_eq!(cp.state, restored.state);
     assert_eq!(cp.meta.profile, restored.meta.profile);
-    assert!(restored.validate_hash(), "hash should validate after roundtrip");
+    assert!(
+        restored.validate_hash(),
+        "hash should validate after roundtrip"
+    );
 
     // Effect journal idempotency
     let mut journal = EffectJournal::new();
@@ -733,7 +733,10 @@ fn c5_checkpoint_resume_full() {
 fn c8_malformed_failure_arity_rejected() {
     let fixture = all_fixtures().into_iter().find(|f| f.id == "C15").unwrap();
     let result = parse_source(fixture.source);
-    assert!(result.is_err(), "C8/C15: 2-field FAILURE should be rejected");
+    assert!(
+        result.is_err(),
+        "C8/C15: 2-field FAILURE should be rejected"
+    );
 }
 
 #[test]
@@ -786,9 +789,15 @@ fn c10_retry_exhausted_returns_failure() {
 
     // All retries fail -> should return error
     let result = rt.execute_retry(3, |_| {
-        Err(RuntimeFailure::new(ErrorCode::NotImplemented, "always fail"))
+        Err(RuntimeFailure::new(
+            ErrorCode::NotImplemented,
+            "always fail",
+        ))
     });
-    assert!(result.is_err(), "C10: exhausted retries should return failure");
+    assert!(
+        result.is_err(),
+        "C10: exhausted retries should return failure"
+    );
 }
 
 #[test]
@@ -802,7 +811,10 @@ fn c10_escalation_with_audit_details() {
 
     let failure = rt.execute_escalate(Some("service unavailable".into()), "agent-esc");
     assert_eq!(failure.message, "service unavailable");
-    assert_eq!(rt.audit_log.last().unwrap().event_type, AuditEventType::Escalated);
+    assert_eq!(
+        rt.audit_log.last().unwrap().event_type,
+        AuditEventType::Escalated
+    );
     assert_eq!(
         rt.audit_log.last().unwrap().details["message"],
         "service unavailable"
