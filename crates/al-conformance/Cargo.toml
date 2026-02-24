@@ -9,6 +9,8 @@ al-ast = { path = "../al-ast" }
 al-lexer = { path = "../al-lexer" }
 al-parser = { path = "../al-parser" }
 al-types = { path = "../al-types" }
+al-hir = { path = "../al-hir" }
+al-vc = { path = "../al-vc" }
 al-capabilities = { path = "../al-capabilities" }
 al-runtime = { path = "../al-runtime" }
 serde = { workspace = true }

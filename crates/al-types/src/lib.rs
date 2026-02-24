@@ -5,6 +5,7 @@
 
 use al_ast::{self, Declaration, Expr, MatchBody, Pattern, Statement, TypeExpr};
 use al_diagnostics::{Diagnostic, DiagnosticSink, ErrorCode, Span, WarningCode};
+use al_vc::{StubSolver, StubSolverConfig, VcGenerator, VerificationCondition};
 use std::collections::{HashMap, HashSet};
 
 /// The profile tag for all MVP diagnostics.
@@ -73,6 +74,10 @@ pub struct PipelineInfo {
 pub struct TypeChecker {
     pub env: TypeEnv,
     pub sink: DiagnosticSink,
+    pub vc_results: Vec<VerificationCondition>,
+    pub synthetic_asserts: Vec<al_vc::SyntheticAssertRewrite>,
+    pub hir_after_vc: Option<al_hir::HirProgram>,
+    vc_solver: StubSolver,
 }
 
 impl TypeChecker {
@@ -80,6 +85,17 @@ impl TypeChecker {
         Self {
             env: TypeEnv::default(),
             sink: DiagnosticSink::new(),
+            vc_results: Vec::new(),
+            synthetic_asserts: Vec::new(),
+            hir_after_vc: None,
+            vc_solver: StubSolver::new(StubSolverConfig::default()),
+        }
+    }
+
+    pub fn with_vc_solver(config: StubSolverConfig) -> Self {
+        Self {
+            vc_solver: StubSolver::new(config),
+            ..Self::new()
         }
     }
 
@@ -99,6 +115,8 @@ impl TypeChecker {
         self.resolve_pipeline_fork_references(program);
         // Pass 7: Propagate operation output/input types across pipelines.
         self.check_pipeline_type_propagation(program);
+        // Pass 8: VC pipeline (REQUIRE/ENSURE/ASSERT generation + solve + rewrite).
+        self.run_vc_pipeline(program);
     }
 
     /// Pass 1: Build declaration/type table.
@@ -757,6 +775,23 @@ impl TypeChecker {
         }
     }
 
+    /// Pass 8: Generate VCs, solve with stub solver, emit diagnostics on invalid,
+    /// and prepare synthetic ASSERT rewrites for unknown results.
+    fn run_vc_pipeline(&mut self, program: &al_ast::Program) {
+        let mut generator = VcGenerator::new();
+        let mut vcs = generator.generate_program(program);
+        for vc in &mut vcs {
+            let _ = self.vc_solver.solve(vc);
+        }
+
+        let mut hir = al_hir::lower_program(program);
+        let rewrites = al_vc::apply_vc_results(&vcs, &mut hir, &mut self.sink);
+
+        self.vc_results = vcs;
+        self.synthetic_asserts = rewrites;
+        self.hir_after_vc = Some(hir);
+    }
+
     /// Check that a RETRY count is a valid non-negative integer (C10).
     pub fn check_retry_count(&mut self, count: i64, span: Span) {
         if count < 0 {
@@ -806,6 +841,7 @@ impl Default for TypeChecker {
 mod tests {
     use super::*;
     use al_ast::{Spanned, TypeExpr};
+    use al_vc::StubSolverMode;
 
     fn dummy_span() -> Span {
         Span::dummy()
@@ -1109,5 +1145,73 @@ PIPELINE P => FetchText -> Normalize
             !checker.has_errors(),
             "compatible operation chains should pass type propagation"
         );
+    }
+
+    #[test]
+    fn vc_pipeline_generates_require_ensure_assert() {
+        let source = r#"
+OPERATION Verify =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  ENSURE x GT 0
+  BODY {
+    ASSERT x GT 0
+    EMIT x
+  }
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        assert_eq!(checker.vc_results.len(), 3);
+        assert!(checker.vc_results.iter().all(|vc| vc.vc_id.starts_with("vc_")));
+    }
+
+    #[test]
+    fn vc_unknown_results_create_synthetic_assert_rewrites() {
+        let source = r#"
+OPERATION Verify =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  BODY { EMIT x }
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        assert!(!checker.has_errors());
+        assert_eq!(checker.synthetic_asserts.len(), 1);
+        let hir = checker.hir_after_vc.as_ref().expect("hir should be captured");
+        let op = hir
+            .declarations
+            .iter()
+            .find(|d| matches!(d, al_hir::HirDeclaration::Operation { name, .. } if name == "Verify"))
+            .expect("operation exists");
+        if let al_hir::HirDeclaration::Operation { body, .. } = op {
+            assert!(matches!(
+                body.last(),
+                Some(al_hir::HirStatement::Assert { meta, .. }) if meta.synthetic
+            ));
+        }
+    }
+
+    #[test]
+    fn vc_invalid_is_compile_error() {
+        let source = r#"
+OPERATION Verify =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  BODY { EMIT x }
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::with_vc_solver(StubSolverConfig {
+            default_mode: StubSolverMode::AlwaysInvalid {
+                counterexample: "x = -1".to_string(),
+            },
+            per_vc: HashMap::new(),
+        });
+        checker.check(&program);
+        assert!(checker.has_errors());
+        assert!(checker.sink.errors().iter().any(|e| {
+            e.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::VcInvalid)
+        }));
     }
 }

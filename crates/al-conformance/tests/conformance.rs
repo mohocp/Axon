@@ -285,6 +285,74 @@ fn c7_audit_runtime() {
     assert_eq!(rt.audit_log[1].event_type, AuditEventType::AssertInserted);
 }
 
+#[test]
+fn c7_vc_generation_from_require_ensure_assert() {
+    let source = r#"
+OPERATION Verified =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  ENSURE x GT 0
+  BODY {
+    ASSERT x GT 0
+    EMIT x
+  }
+"#;
+    let program = parse_source(source).expect("should parse");
+    let mut checker = al_types::TypeChecker::new();
+    checker.check(&program);
+    assert_eq!(checker.vc_results.len(), 3, "should generate 3 VCs");
+    assert!(checker.vc_results.iter().all(|vc| vc.vc_id.starts_with("vc_")));
+}
+
+#[test]
+fn c7_vc_unknown_rewrite_is_synthetic_assert() {
+    let source = r#"
+OPERATION Verified =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  BODY { EMIT x }
+"#;
+    let program = parse_source(source).expect("should parse");
+    let mut checker = al_types::TypeChecker::new();
+    checker.check(&program);
+    assert!(!checker.has_errors(), "unknown VC should not fail compile");
+    assert_eq!(checker.synthetic_asserts.len(), 1);
+    let hir = checker.hir_after_vc.as_ref().expect("hir available");
+    let op = hir
+        .declarations
+        .iter()
+        .find(|d| matches!(d, al_hir::HirDeclaration::Operation { name, .. } if name == "Verified"))
+        .expect("operation exists");
+    if let al_hir::HirDeclaration::Operation { body, .. } = op {
+        assert!(matches!(
+            body.last(),
+            Some(al_hir::HirStatement::Assert { meta, .. }) if meta.synthetic
+        ));
+    }
+}
+
+#[test]
+fn c7_vc_invalid_emits_compile_error() {
+    let source = r#"
+OPERATION Verified =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  BODY { EMIT x }
+"#;
+    let program = parse_source(source).expect("should parse");
+    let mut checker = al_types::TypeChecker::with_vc_solver(al_vc::StubSolverConfig {
+        default_mode: al_vc::StubSolverMode::AlwaysInvalid {
+            counterexample: "x = -1".into(),
+        },
+        per_vc: std::collections::HashMap::new(),
+    });
+    checker.check(&program);
+    assert!(checker.has_errors(), "invalid VC should fail compile");
+    assert!(checker.sink.errors().iter().any(|d| {
+        d.code == al_diagnostics::DiagnosticCode::Error(al_diagnostics::ErrorCode::VcInvalid)
+    }));
+}
+
 // ===========================================================================
 // C8: Excluded features
 // ===========================================================================

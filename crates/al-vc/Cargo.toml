@@ -7,3 +7,6 @@ edition.workspace = true
 al-diagnostics = { path = "../al-diagnostics" }
 al-ast = { path = "../al-ast" }
 al-hir = { path = "../al-hir" }
+
+[dev-dependencies]
+al-parser = { path = "../al-parser" }

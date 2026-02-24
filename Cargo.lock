@@ -47,10 +47,12 @@ dependencies = [
  "al-ast",
  "al-capabilities",
  "al-diagnostics",
+ "al-hir",
  "al-lexer",
  "al-parser",
  "al-runtime",
  "al-types",
+ "al-vc",
  "serde",
  "serde_json",
 ]
@@ -125,7 +127,9 @@ dependencies = [
  "al-ast",
  "al-capabilities",
  "al-diagnostics",
+ "al-hir",
  "al-parser",
+ "al-vc",
 ]
 
 [[package]]
@@ -135,6 +139,7 @@ dependencies = [
  "al-ast",
  "al-diagnostics",
  "al-hir",
+ "al-parser",
 ]
 
 [[package]]
