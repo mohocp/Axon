@@ -20,7 +20,9 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use al_diagnostics::{Diagnostic, ErrorCode, Severity, Span, WarningCode};
+use al_diagnostics::{Diagnostic, ErrorCode, Span, WarningCode};
+#[cfg(test)]
+use al_diagnostics::Severity;
 use serde::{Deserialize, Serialize};
 
 // ===========================================================================

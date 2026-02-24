@@ -58,8 +58,8 @@ pub struct AgentInfo {
 #[derive(Debug, Clone)]
 pub struct OperationInfo {
     pub name: String,
-    pub inputs: Vec<(String, String)>,
-    pub output: Option<String>,
+    pub inputs: Vec<(String, TypeExpr)>,
+    pub output: Option<TypeExpr>,
     pub span: Span,
 }
 
@@ -97,6 +97,8 @@ impl TypeChecker {
         self.check_require_clauses(program);
         // Pass 6: Resolve pipeline/fork references (P2)
         self.resolve_pipeline_fork_references(program);
+        // Pass 7: Propagate operation output/input types across pipelines.
+        self.check_pipeline_type_propagation(program);
     }
 
     /// Pass 1: Build declaration/type table.
@@ -185,13 +187,11 @@ impl TypeChecker {
                             name.span,
                         ));
                     } else {
-                        let input_info: Vec<(String, String)> = inputs
+                        let input_info: Vec<(String, TypeExpr)> = inputs
                             .iter()
-                            .map(|p| {
-                                (p.node.name.node.clone(), format!("{:?}", p.node.ty.node))
-                            })
+                            .map(|p| (p.node.name.node.clone(), p.node.ty.node.clone()))
                             .collect();
-                        let output_ty = output.as_ref().map(|o| format!("{:?}", o.node));
+                        let output_ty = output.as_ref().map(|o| o.node.clone());
                         self.env.operations.insert(
                             name.node.clone(),
                             OperationInfo {
@@ -524,6 +524,239 @@ impl TypeChecker {
         }
     }
 
+    // ── Pass 7: Pipeline type propagation ───────────────────────────
+
+    /// Check adjacent operation stages for output->input type compatibility.
+    fn check_pipeline_type_propagation(&mut self, program: &al_ast::Program) {
+        for decl in &program.declarations {
+            match &decl.node {
+                Declaration::PipelineDecl { name, chain } => {
+                    self.check_pipeline_chain_type_compatibility(
+                        &chain.node,
+                        &format!("pipeline '{}'", name.node),
+                    );
+                }
+                Declaration::OperationDecl { name, body, .. } => {
+                    for stmt in &body.node.stmts {
+                        self.check_pipeline_types_in_stmt(&stmt.node, &name.node);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Check operation type compatibility for each adjacent pair in a chain.
+    fn check_pipeline_chain_type_compatibility(
+        &mut self,
+        chain: &al_ast::PipelineChain,
+        context: &str,
+    ) {
+        let mut prev_stage: Option<(String, OperationInfo)> = None;
+
+        for stage in &chain.stages {
+            let Expr::Identifier(curr_name) = &stage.expr.node else {
+                prev_stage = None;
+                continue;
+            };
+
+            let Some(curr_op) = self.env.operations.get(curr_name).cloned() else {
+                prev_stage = None;
+                continue;
+            };
+
+            if let Some((prev_name, prev_op)) = &prev_stage {
+                self.check_stage_type_compatibility(
+                    prev_name,
+                    prev_op,
+                    curr_name,
+                    &curr_op,
+                    stage.expr.span,
+                    context,
+                );
+            }
+
+            prev_stage = Some((curr_name.clone(), curr_op));
+        }
+    }
+
+    /// Recursively inspect statements for FORK branch pipeline chains.
+    fn check_pipeline_types_in_stmt(&mut self, stmt: &Statement, op_name: &str) {
+        match stmt {
+            Statement::Store { value, .. } => {
+                self.check_pipeline_types_in_expr(&value.node, op_name);
+            }
+            Statement::Assign { value, .. } => {
+                self.check_pipeline_types_in_expr(&value.node, op_name);
+            }
+            Statement::Expr { expr } => {
+                self.check_pipeline_types_in_expr(&expr.node, op_name);
+            }
+            Statement::Match { arms, otherwise, .. } => {
+                for arm in arms {
+                    match &arm.node.body.node {
+                        MatchBody::Block(block) => {
+                            for stmt in &block.node.stmts {
+                                self.check_pipeline_types_in_stmt(&stmt.node, op_name);
+                            }
+                        }
+                        MatchBody::Expr(expr) => {
+                            self.check_pipeline_types_in_expr(&expr.node, op_name);
+                        }
+                    }
+                }
+                if let Some(otherwise) = otherwise {
+                    match &otherwise.node {
+                        MatchBody::Block(block) => {
+                            for stmt in &block.node.stmts {
+                                self.check_pipeline_types_in_stmt(&stmt.node, op_name);
+                            }
+                        }
+                        MatchBody::Expr(expr) => {
+                            self.check_pipeline_types_in_expr(&expr.node, op_name);
+                        }
+                    }
+                }
+            }
+            Statement::Loop { body, .. } => {
+                for stmt in &body.node.stmts {
+                    self.check_pipeline_types_in_stmt(&stmt.node, op_name);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recursively inspect expressions for FORK branches.
+    fn check_pipeline_types_in_expr(&mut self, expr: &Expr, op_name: &str) {
+        match expr {
+            Expr::Fork { branches, .. } => {
+                for branch in branches {
+                    self.check_pipeline_chain_type_compatibility(
+                        &branch.node.chain.node,
+                        &format!(
+                            "operation '{}' fork branch '{}'",
+                            op_name, branch.node.name.node
+                        ),
+                    );
+                }
+            }
+            Expr::Call { func, args } => {
+                self.check_pipeline_types_in_expr(&func.node, op_name);
+                for arg in args {
+                    self.check_pipeline_types_in_expr(&arg.node.value.node, op_name);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.check_pipeline_types_in_expr(&left.node, op_name);
+                self.check_pipeline_types_in_expr(&right.node, op_name);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.check_pipeline_types_in_expr(&operand.node, op_name);
+            }
+            Expr::Member { object, .. } => {
+                self.check_pipeline_types_in_expr(&object.node, op_name);
+            }
+            Expr::Confidence { expr } => {
+                self.check_pipeline_types_in_expr(&expr.node, op_name);
+            }
+            Expr::Range { start, end } => {
+                self.check_pipeline_types_in_expr(&start.node, op_name);
+                self.check_pipeline_types_in_expr(&end.node, op_name);
+            }
+            Expr::Pipeline { left, right, .. } => {
+                self.check_pipeline_types_in_expr(&left.node, op_name);
+                self.check_pipeline_types_in_expr(&right.node, op_name);
+            }
+            Expr::Resume { expr } => {
+                self.check_pipeline_types_in_expr(&expr.node, op_name);
+            }
+            Expr::List { elements } => {
+                for element in elements {
+                    self.check_pipeline_types_in_expr(&element.node, op_name);
+                }
+            }
+            Expr::Map { items } => {
+                for item in items {
+                    self.check_pipeline_types_in_expr(&item.node.value.node, op_name);
+                }
+            }
+            Expr::Paren { inner } => {
+                self.check_pipeline_types_in_expr(&inner.node, op_name);
+            }
+            Expr::Literal(_) | Expr::Identifier(_) => {}
+        }
+    }
+
+    /// Validate that `prev.output` matches the first input type of `curr`.
+    fn check_stage_type_compatibility(
+        &mut self,
+        prev_name: &str,
+        prev: &OperationInfo,
+        curr_name: &str,
+        curr: &OperationInfo,
+        span: Span,
+        context: &str,
+    ) {
+        let Some(prev_output) = &prev.output else {
+            return;
+        };
+        let Some((curr_input_name, curr_input_ty)) = curr.inputs.first() else {
+            return;
+        };
+
+        if !Self::types_compatible(prev_output, curr_input_ty) {
+            self.sink.emit(Diagnostic::error(
+                ErrorCode::TypeMismatch,
+                format!(
+                    "Type mismatch in {}: stage '{}' outputs {}, but stage '{}' expects first input '{}' as {}",
+                    context,
+                    prev_name,
+                    Self::format_type_expr(prev_output),
+                    curr_name,
+                    curr_input_name,
+                    Self::format_type_expr(curr_input_ty),
+                ),
+                span,
+            ));
+        }
+    }
+
+    fn types_compatible(left: &TypeExpr, right: &TypeExpr) -> bool {
+        Self::format_type_expr(left) == Self::format_type_expr(right)
+    }
+
+    fn format_type_expr(ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Named { name, params } => {
+                if params.is_empty() {
+                    name.node.clone()
+                } else {
+                    let params = params
+                        .iter()
+                        .map(|p| Self::format_type_expr(&p.node))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}[{}]", name.node, params)
+                }
+            }
+            TypeExpr::Record { fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.node.name.node, Self::format_type_expr(&f.node.ty.node)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{{}}}", fields)
+            }
+            TypeExpr::Union { types } => types
+                .iter()
+                .map(|t| Self::format_type_expr(&t.node))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            TypeExpr::Constrained { ty, .. } => Self::format_type_expr(&ty.node),
+        }
+    }
+
     /// Check that a RETRY count is a valid non-negative integer (C10).
     pub fn check_retry_count(&mut self, count: i64, span: Span) {
         if count < 0 {
@@ -826,6 +1059,55 @@ PIPELINE P => Fetch -> Validate
         assert!(
             !checker.sink.has_warnings(),
             "resolved pipeline stages should not warn"
+        );
+    }
+
+    #[test]
+    fn pipeline_stage_type_mismatch_detected() {
+        let source = r#"
+OPERATION Fetch =>
+  OUTPUT Int64
+  BODY { EMIT 1 }
+
+OPERATION Normalize =>
+  INPUT text: Str
+  OUTPUT Str
+  BODY { EMIT text }
+
+PIPELINE P => Fetch -> Normalize
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        assert!(checker.has_errors(), "pipeline type mismatch should error");
+        let errors = checker.sink.errors();
+        assert!(errors.iter().any(|e| {
+            e.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::TypeMismatch)
+                && e.message.contains("Fetch")
+                && e.message.contains("Normalize")
+        }));
+    }
+
+    #[test]
+    fn pipeline_stage_type_match_accepted() {
+        let source = r#"
+OPERATION FetchText =>
+  OUTPUT Str
+  BODY { EMIT "x" }
+
+OPERATION Normalize =>
+  INPUT text: Str
+  OUTPUT Str
+  BODY { EMIT text }
+
+PIPELINE P => FetchText -> Normalize
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        assert!(
+            !checker.has_errors(),
+            "compatible operation chains should pass type propagation"
         );
     }
 }

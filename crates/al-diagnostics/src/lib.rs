@@ -6,7 +6,7 @@
 //! audit event logging (JSONL schema), and a diagnostic sink for
 //! collecting errors and warnings throughout compilation and execution.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

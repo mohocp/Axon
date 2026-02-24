@@ -2,7 +2,7 @@
 //!
 //! MVP v0.1: In-memory checkpoint store with schema version validation.
 
-use al_diagnostics::{ErrorCode, RuntimeFailure, Span};
+use al_diagnostics::{ErrorCode, RuntimeFailure};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
