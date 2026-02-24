@@ -4,6 +4,7 @@
 //! failure arity enforcement, capability requirement tracking.
 
 use al_ast::{self, Declaration, Expr, MatchBody, Pattern, Statement, TypeExpr};
+use al_capabilities::{resolve_capability, Capability, CapabilityError};
 use al_diagnostics::{Diagnostic, DiagnosticSink, ErrorCode, Span, WarningCode};
 use al_vc::{StubSolver, StubSolverConfig, VcGenerator, VerificationCondition};
 use std::collections::{HashMap, HashSet};
@@ -111,11 +112,13 @@ impl TypeChecker {
         self.resolve_type_references(program);
         // Pass 5: Validate REQUIRE clause expressions (P2)
         self.check_require_clauses(program);
-        // Pass 6: Resolve pipeline/fork references (P2)
+        // Pass 6: Delegation static validation.
+        self.check_delegation_statics(program);
+        // Pass 7: Resolve pipeline/fork references (P2)
         self.resolve_pipeline_fork_references(program);
-        // Pass 7: Propagate operation output/input types across pipelines.
+        // Pass 8: Propagate operation output/input types across pipelines.
         self.check_pipeline_type_propagation(program);
-        // Pass 8: VC pipeline (REQUIRE/ENSURE/ASSERT generation + solve + rewrite).
+        // Pass 9: VC pipeline (REQUIRE/ENSURE/ASSERT generation + solve + rewrite).
         self.run_vc_pipeline(program);
     }
 
@@ -386,15 +389,52 @@ impl TypeChecker {
     fn check_require_clauses(&mut self, program: &al_ast::Program) {
         for decl in &program.declarations {
             if let Declaration::OperationDecl {
-                requires, inputs, ..
+                requires, inputs, body, ..
             } = &decl.node
             {
-                let input_names: HashSet<String> =
+                let mut known_names: HashSet<String> =
                     inputs.iter().map(|i| i.node.name.node.clone()).collect();
+                self.collect_store_bindings_from_block(body, &mut known_names);
                 for req in requires {
-                    self.check_require_expr(req, &input_names);
+                    self.check_require_expr(req, &known_names);
                 }
             }
+        }
+    }
+
+    fn collect_store_bindings_from_block(
+        &self,
+        block: &al_ast::Spanned<al_ast::Block>,
+        known_names: &mut HashSet<String>,
+    ) {
+        for stmt in &block.node.stmts {
+            self.collect_store_bindings_from_stmt(&stmt.node, known_names);
+        }
+    }
+
+    fn collect_store_bindings_from_stmt(&self, stmt: &Statement, known_names: &mut HashSet<String>) {
+        match stmt {
+            Statement::Store { name, .. } => {
+                known_names.insert(name.node.clone());
+            }
+            Statement::Match {
+                arms, otherwise, ..
+            } => {
+                for arm in arms {
+                    if let MatchBody::Block(block) = &arm.node.body.node {
+                        self.collect_store_bindings_from_block(block, known_names);
+                    }
+                }
+                if let Some(ow) = otherwise {
+                    if let MatchBody::Block(block) = &ow.node {
+                        self.collect_store_bindings_from_block(block, known_names);
+                    }
+                }
+            }
+            Statement::Loop { body, .. } => {
+                self.collect_store_bindings_from_block(body, known_names);
+            }
+            _ => {}
         }
     }
 
@@ -447,6 +487,86 @@ impl TypeChecker {
             }
             _ => {} // other expression types OK for now
         }
+    }
+
+    fn check_delegation_statics(&mut self, program: &al_ast::Program) {
+        let has_delegate_capability = self
+            .env
+            .agents
+            .values()
+            .any(|agent| Self::caps_include_delegate(&agent.capabilities));
+
+        for decl in &program.declarations {
+            if let Declaration::OperationDecl { body, .. } = &decl.node {
+                for stmt in &body.node.stmts {
+                    self.check_delegation_in_stmt(stmt, has_delegate_capability);
+                }
+            }
+        }
+    }
+
+    fn check_delegation_in_stmt(
+        &mut self,
+        stmt: &al_ast::Spanned<Statement>,
+        has_delegate_capability: bool,
+    ) {
+        match &stmt.node {
+            Statement::Delegate { target, .. } => {
+                if !has_delegate_capability {
+                    self.sink.emit(Diagnostic::error(
+                        ErrorCode::CapabilityDenied,
+                        "DELEGATE statement is not permitted: no AGENT declares DELEGATE capability",
+                        stmt.span,
+                    ));
+                }
+                if !self.env.agents.contains_key(&target.node) {
+                    self.sink.emit(Diagnostic::error(
+                        ErrorCode::UnknownIdentifier,
+                        format!("Unknown delegate target agent '{}'", target.node),
+                        target.span,
+                    ));
+                }
+            }
+            Statement::Match {
+                arms, otherwise, ..
+            } => {
+                for arm in arms {
+                    if let MatchBody::Block(block) = &arm.node.body.node {
+                        for nested in &block.node.stmts {
+                            self.check_delegation_in_stmt(nested, has_delegate_capability);
+                        }
+                    }
+                }
+                if let Some(ow) = otherwise {
+                    if let MatchBody::Block(block) = &ow.node {
+                        for nested in &block.node.stmts {
+                            self.check_delegation_in_stmt(nested, has_delegate_capability);
+                        }
+                    }
+                }
+            }
+            Statement::Loop { body, .. } => {
+                for nested in &body.node.stmts {
+                    self.check_delegation_in_stmt(nested, has_delegate_capability);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn caps_include_delegate(capability_names: &[String]) -> bool {
+        capability_names.iter().any(|name| {
+            if name.eq_ignore_ascii_case("DELEGATE") {
+                return true;
+            }
+            match resolve_capability(name) {
+                Ok(Capability::Delegate) => true,
+                Err(CapabilityError::DeprecatedAlias { canonical, .. }) => {
+                    canonical == Capability::Delegate
+                }
+                _ => false,
+            }
+        })
     }
 
     // ── Pass 6: Pipeline/fork reference resolution ───────────────────
@@ -785,11 +905,56 @@ impl TypeChecker {
         }
 
         let mut hir = al_hir::lower_program(program);
+        Self::populate_required_caps(&mut hir);
         let rewrites = al_vc::apply_vc_results(&vcs, &mut hir, &mut self.sink);
 
         self.vc_results = vcs;
         self.synthetic_asserts = rewrites;
         self.hir_after_vc = Some(hir);
+    }
+
+    fn populate_required_caps(hir: &mut al_hir::HirProgram) {
+        for decl in &mut hir.declarations {
+            if let al_hir::HirDeclaration::Operation { body, meta, .. } = decl {
+                let mut op_caps = HashSet::new();
+                for stmt in body {
+                    let stmt_caps = Self::required_caps_for_stmt(stmt);
+                    let stmt_meta = Self::statement_meta_mut(stmt);
+                    stmt_meta.required_caps = stmt_caps.iter().map(|cap| cap.to_string()).collect();
+                    op_caps.extend(stmt_caps.into_iter().map(|cap| cap.to_string()));
+                }
+                let mut caps: Vec<String> = op_caps.into_iter().collect();
+                caps.sort();
+                meta.required_caps = caps;
+            }
+        }
+    }
+
+    fn required_caps_for_stmt(stmt: &al_hir::HirStatement) -> Vec<&'static str> {
+        match stmt {
+            al_hir::HirStatement::Delegate { .. } => vec!["DELEGATE"],
+            _ => Vec::new(),
+        }
+    }
+
+    fn statement_meta_mut(stmt: &mut al_hir::HirStatement) -> &mut al_hir::HirMeta {
+        match stmt {
+            al_hir::HirStatement::Assert { meta, .. }
+            | al_hir::HirStatement::Retry { meta, .. }
+            | al_hir::HirStatement::Escalate { meta, .. }
+            | al_hir::HirStatement::Checkpoint { meta, .. }
+            | al_hir::HirStatement::Resume { meta, .. }
+            | al_hir::HirStatement::Fork { meta, .. }
+            | al_hir::HirStatement::Delegate { meta, .. }
+            | al_hir::HirStatement::Store { meta, .. }
+            | al_hir::HirStatement::Mutable { meta, .. }
+            | al_hir::HirStatement::Assign { meta, .. }
+            | al_hir::HirStatement::Match { meta, .. }
+            | al_hir::HirStatement::Loop { meta, .. }
+            | al_hir::HirStatement::Emit { meta, .. }
+            | al_hir::HirStatement::Halt { meta, .. }
+            | al_hir::HirStatement::Expr { meta, .. } => meta,
+        }
     }
 
     /// Check that a RETRY count is a valid non-negative integer (C10).
@@ -1062,6 +1227,32 @@ OPERATION Validate =>
         );
     }
 
+    #[test]
+    fn require_references_store_binding() {
+        let source = r#"
+OPERATION Validate =>
+  INPUT data: Int64
+  REQUIRE cached GT 0
+  BODY {
+    STORE cached = data
+    EMIT cached
+  }
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        let require_errors: Vec<_> = checker
+            .sink
+            .errors()
+            .into_iter()
+            .filter(|e| e.message.contains("REQUIRE"))
+            .collect();
+        assert!(
+            require_errors.is_empty(),
+            "REQUIRE should accept enclosing STORE bindings"
+        );
+    }
+
     // ── Pipeline/fork reference resolution ─────────────────────────
 
     #[test]
@@ -1167,6 +1358,28 @@ OPERATION Verify =>
     }
 
     #[test]
+    fn vc_pipeline_generates_invariant_boundary_vcs() {
+        let source = r#"
+OPERATION Verify =>
+  INPUT x: Int64
+  INVARIANT x GTE 0
+  BODY { EMIT x }
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        assert_eq!(checker.vc_results.len(), 2);
+        assert!(checker
+            .vc_results
+            .iter()
+            .any(|vc| vc.origin == al_vc::VcOrigin::InvariantLoopEntry));
+        assert!(checker
+            .vc_results
+            .iter()
+            .any(|vc| vc.origin == al_vc::VcOrigin::InvariantIterationBoundary));
+    }
+
+    #[test]
     fn vc_unknown_results_create_synthetic_assert_rewrites() {
         let source = r#"
 OPERATION Verify =>
@@ -1213,5 +1426,80 @@ OPERATION Verify =>
         assert!(checker.sink.errors().iter().any(|e| {
             e.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::VcInvalid)
         }));
+    }
+
+    #[test]
+    fn delegate_requires_declared_delegate_capability() {
+        let source = r#"
+AGENT Worker =>
+  CAPABILITIES [FILE_READ]
+
+OPERATION Route =>
+  BODY {
+    DELEGATE task TO Worker => { }
+    EMIT 1
+  }
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        assert!(checker.sink.errors().iter().any(|e| {
+            e.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::CapabilityDenied)
+                && e.message.contains("DELEGATE statement is not permitted")
+        }));
+    }
+
+    #[test]
+    fn delegate_requires_known_target_agent() {
+        let source = r#"
+AGENT Caller =>
+  CAPABILITIES [delegate]
+
+OPERATION Route =>
+  BODY {
+    DELEGATE task TO MissingWorker => { }
+    EMIT 1
+  }
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        assert!(checker.sink.errors().iter().any(|e| {
+            e.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::UnknownIdentifier)
+                && e.message.contains("Unknown delegate target agent 'MissingWorker'")
+        }));
+    }
+
+    #[test]
+    fn hir_required_caps_populated_for_delegate() {
+        let source = r#"
+AGENT Caller =>
+  CAPABILITIES [delegate]
+
+AGENT Worker =>
+  CAPABILITIES [FILE_READ]
+
+OPERATION Route =>
+  BODY {
+    DELEGATE task TO Worker => { }
+    EMIT 1
+  }
+"#;
+        let program = al_parser::parse(source).unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check(&program);
+        let hir = checker.hir_after_vc.as_ref().expect("hir should be captured");
+        let op = hir
+            .declarations
+            .iter()
+            .find(|d| matches!(d, al_hir::HirDeclaration::Operation { name, .. } if name == "Route"))
+            .expect("operation exists");
+        if let al_hir::HirDeclaration::Operation { body, meta, .. } = op {
+            assert_eq!(meta.required_caps, vec!["DELEGATE".to_string()]);
+            assert!(matches!(
+                &body[0],
+                al_hir::HirStatement::Delegate { meta, .. } if meta.required_caps == vec!["DELEGATE".to_string()]
+            ));
+        }
     }
 }

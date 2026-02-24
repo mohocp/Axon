@@ -38,3 +38,26 @@
 - No broad refactors outside VC-core slice.
 - Capability/delegation behavior left unchanged.
 - INVARIANT VC generation intentionally deferred (remaining Round 4 item).
+
+## Addendum (Round 4 Remaining Items Completed)
+
+- Implemented VC generation from `INVARIANT` with two obligation boundaries per invariant:
+  - loop entry (`InvariantLoopEntry`)
+  - iteration boundary (`InvariantIterationBoundary`)
+- Enforced delegation static checks in `al-types` type-check path:
+  - `DELEGATE` now requires at least one declared `AGENT` with `DELEGATE` capability.
+  - Delegate target must resolve to a declared `AGENT`.
+- Populated HIR `required_caps` where deterministically inferable in MVP:
+  - `HirStatement::Delegate` now carries `required_caps = ["DELEGATE"]`.
+  - Operation-level `HirDeclaration::Operation.meta.required_caps` now aggregates statement-level inferred caps.
+- Expanded `REQUIRE` scope validation to include enclosing `STORE` bindings from operation bodies (including nested blocks).
+
+### Addendum Tests
+
+- `al-vc`:
+  - Added test for invariant VC boundary generation (entry + iteration).
+- `al-types`:
+  - Added REQUIRE scope test for STORE bindings.
+  - Added invariant VC integration test through type-check pipeline.
+  - Added delegation static enforcement tests (missing DELEGATE capability, unknown target agent).
+  - Added HIR `required_caps` population test for delegate statements.

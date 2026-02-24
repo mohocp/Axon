@@ -27,6 +27,8 @@ pub enum VcResult {
 pub enum VcOrigin {
     Require,
     Ensure,
+    InvariantLoopEntry,
+    InvariantIterationBoundary,
     Assert { synthetic: bool },
 }
 
@@ -85,6 +87,7 @@ impl VcGenerator {
                 name,
                 requires,
                 ensures,
+                invariants,
                 body,
                 ..
             } = &decl.node
@@ -94,6 +97,18 @@ impl VcGenerator {
                 }
                 for ens in ensures {
                     vcs.push(self.make_vc(name.node.as_str(), VcOrigin::Ensure, ens));
+                }
+                for invariant in invariants {
+                    vcs.push(self.make_vc(
+                        name.node.as_str(),
+                        VcOrigin::InvariantLoopEntry,
+                        invariant,
+                    ));
+                    vcs.push(self.make_vc(
+                        name.node.as_str(),
+                        VcOrigin::InvariantIterationBoundary,
+                        invariant,
+                    ));
                 }
                 for stmt in &body.node.stmts {
                     self.collect_assert_vcs(name.node.as_str(), &stmt.node, stmt.span, &mut vcs);
@@ -324,6 +339,26 @@ OPERATION Verify =>
         assert_eq!(vcs[2].origin, VcOrigin::Assert { synthetic: false });
         assert_ne!(vcs[0].vc_id, vcs[1].vc_id);
         assert_ne!(vcs[1].vc_id, vcs[2].vc_id);
+    }
+
+    #[test]
+    fn generates_two_vcs_per_invariant_for_entry_and_iteration_boundary() {
+        let source = r#"
+OPERATION LoopGuarded =>
+  INPUT x: Int64
+  INVARIANT x GTE 0
+  BODY {
+    EMIT x
+  }
+"#;
+        let program = parse(source);
+        let mut generator = VcGenerator::new();
+        let vcs = generator.generate_program(&program);
+
+        assert_eq!(vcs.len(), 2);
+        assert_eq!(vcs[0].origin, VcOrigin::InvariantLoopEntry);
+        assert_eq!(vcs[1].origin, VcOrigin::InvariantIterationBoundary);
+        assert_ne!(vcs[0].vc_id, vcs[1].vc_id);
     }
 
     #[test]
