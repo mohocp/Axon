@@ -127,6 +127,84 @@ fn smoke_usage_mentions_format_flag() {
 }
 
 // =========================================================================
+// --help flag (rc3 fix)
+// =========================================================================
+
+#[test]
+fn smoke_help_flag_long() {
+    let (_stdout, stderr, code) = run_al(&["--help"]);
+    assert_eq!(code, 0, "--help should exit 0");
+    assert!(
+        stderr.contains("Usage: al"),
+        "--help should show usage: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("--help"),
+        "--help output should mention --help: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("--version"),
+        "--help output should mention --version: {}",
+        stderr
+    );
+}
+
+#[test]
+fn smoke_help_flag_short() {
+    let (_stdout, stderr, code) = run_al(&["-h"]);
+    assert_eq!(code, 0, "-h should exit 0");
+    assert!(
+        stderr.contains("Usage: al"),
+        "-h should show usage: {}",
+        stderr
+    );
+}
+
+#[test]
+fn smoke_help_with_command_still_shows_help() {
+    let (_stdout, stderr, code) = run_al(&["--help", "check"]);
+    assert_eq!(code, 0, "--help should take priority over command");
+    assert!(
+        stderr.contains("Usage: al"),
+        "--help should show usage even with command: {}",
+        stderr
+    );
+}
+
+// =========================================================================
+// --version flag (rc3 fix)
+// =========================================================================
+
+#[test]
+fn smoke_version_flag_long() {
+    let (stdout, _stderr, code) = run_al(&["--version"]);
+    assert_eq!(code, 0, "--version should exit 0");
+    assert!(
+        stdout.contains("al "),
+        "--version should print 'al <version>': {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("0.1.0"),
+        "--version should include version number: {}",
+        stdout
+    );
+}
+
+#[test]
+fn smoke_version_flag_short() {
+    let (stdout, _stderr, code) = run_al(&["-V"]);
+    assert_eq!(code, 0, "-V should exit 0");
+    assert!(
+        stdout.contains("al "),
+        "-V should print version: {}",
+        stdout
+    );
+}
+
+// =========================================================================
 // al lex — command UX
 // =========================================================================
 
@@ -506,5 +584,202 @@ fn smoke_run_no_file_shows_usage() {
         stderr.contains("Usage: al run"),
         "should show run usage: {}",
         stderr
+    );
+}
+
+// =========================================================================
+// JSON output correctness (rc3 fix)
+// =========================================================================
+
+#[test]
+fn smoke_check_json_success_is_valid_json() {
+    let source = r#"
+OPERATION produce => BODY { EMIT 42 }
+PIPELINE Main => produce
+"#;
+    let (stdout, _stderr, code) = run_al_cmd_format("check", source, "json");
+    assert_eq!(code, 0, "check should succeed");
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {}\n---\n{}", e, stdout));
+    assert_eq!(parsed["status"], "ok", "status should be ok");
+    assert_eq!(parsed["command"], "check", "command should be check");
+    assert!(
+        parsed["summary"].is_object(),
+        "summary should be an object: {}",
+        stdout
+    );
+    assert!(
+        parsed["summary"]["operations"].is_number(),
+        "summary.operations should be a number: {}",
+        stdout
+    );
+    assert!(
+        parsed["summary"]["pipelines"].is_number(),
+        "summary.pipelines should be a number: {}",
+        stdout
+    );
+}
+
+#[test]
+fn smoke_check_jsonl_success_is_valid_jsonl() {
+    let source = r#"
+OPERATION produce => BODY { EMIT 42 }
+PIPELINE Main => produce
+"#;
+    let (stdout, _stderr, code) = run_al_cmd_format("check", source, "jsonl");
+    assert_eq!(code, 0, "check should succeed");
+    // JSONL: each non-empty line must be valid JSON
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = serde_json::from_str(trimmed)
+            .unwrap_or_else(|e| panic!("line is not valid JSON: {}\n---\n{}", e, trimmed));
+        assert_eq!(parsed["status"], "ok");
+        assert_eq!(parsed["command"], "check");
+    }
+}
+
+#[test]
+fn smoke_check_json_error_is_valid_json() {
+    let source = r#"
+TYPE Dup = Int64
+TYPE Dup = Str
+"#;
+    let (_stdout, stderr, code) = run_al_cmd_format("check", source, "json");
+    assert_ne!(code, 0);
+    // Error diagnostic in JSON mode should be parseable JSON
+    let parsed: serde_json::Value = serde_json::from_str(stderr.trim())
+        .unwrap_or_else(|e| panic!("stderr is not valid JSON: {}\n---\n{}", e, stderr));
+    assert_eq!(
+        parsed["severity"], "error",
+        "should have error severity: {}",
+        stderr
+    );
+    assert!(
+        parsed["code"].is_string(),
+        "should have a code field: {}",
+        stderr
+    );
+}
+
+#[test]
+fn smoke_check_jsonl_error_is_valid_jsonl() {
+    let source = r#"
+TYPE Dup = Int64
+TYPE Dup = Str
+"#;
+    let (_stdout, stderr, code) = run_al_cmd_format("check", source, "jsonl");
+    assert_ne!(code, 0);
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = serde_json::from_str(trimmed)
+            .unwrap_or_else(|e| panic!("line is not valid JSONL: {}\n---\n{}", e, trimmed));
+        assert_eq!(parsed["severity"], "error");
+    }
+}
+
+#[test]
+fn smoke_run_json_success_is_valid_json() {
+    let source = r#"
+OPERATION produce => BODY { EMIT 42 }
+PIPELINE Main => produce
+"#;
+    let (stdout, _stderr, code) = run_al_cmd_format("run", source, "json");
+    assert_eq!(code, 0, "run should succeed");
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {}\n---\n{}", e, stdout));
+    assert_eq!(parsed["status"], "ok");
+    assert_eq!(parsed["command"], "run");
+    assert!(
+        parsed["result"].is_string(),
+        "result should be a string: {}",
+        stdout
+    );
+    assert!(
+        parsed["phases"].is_object(),
+        "phases should be an object: {}",
+        stdout
+    );
+}
+
+#[test]
+fn smoke_run_jsonl_success_is_valid_jsonl() {
+    let source = r#"
+OPERATION produce => BODY { EMIT 42 }
+PIPELINE Main => produce
+"#;
+    let (stdout, _stderr, code) = run_al_cmd_format("run", source, "jsonl");
+    assert_eq!(code, 0, "run should succeed");
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = serde_json::from_str(trimmed)
+            .unwrap_or_else(|e| panic!("line is not valid JSONL: {}\n---\n{}", e, trimmed));
+        assert_eq!(parsed["status"], "ok");
+        assert_eq!(parsed["command"], "run");
+    }
+}
+
+#[test]
+fn smoke_run_json_error_is_valid_json() {
+    let source = r#"
+OPERATION test => BODY { ESCALATE("fail") }
+PIPELINE Main => test
+"#;
+    let (_stdout, stderr, code) = run_al_cmd_format("run", source, "json");
+    assert_ne!(code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(stderr.trim())
+        .unwrap_or_else(|e| panic!("stderr is not valid JSON: {}\n---\n{}", e, stderr));
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["command"], "run");
+    assert!(
+        parsed["message"].is_string(),
+        "should have a message field: {}",
+        stderr
+    );
+}
+
+#[test]
+fn smoke_run_jsonl_error_is_valid_jsonl() {
+    let source = r#"
+OPERATION test => BODY { ESCALATE("fail") }
+PIPELINE Main => test
+"#;
+    let (_stdout, stderr, code) = run_al_cmd_format("run", source, "jsonl");
+    assert_ne!(code, 0);
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = serde_json::from_str(trimmed)
+            .unwrap_or_else(|e| panic!("line is not valid JSONL: {}\n---\n{}", e, trimmed));
+        assert_eq!(parsed["status"], "error");
+    }
+}
+
+#[test]
+fn smoke_run_json_result_contains_value() {
+    let source = r#"
+OPERATION produce => BODY { EMIT 42 }
+OPERATION double =>
+  INPUT x: Int64
+  BODY { EMIT x + x }
+PIPELINE Main => produce -> double
+"#;
+    let (stdout, _stderr, code) = run_al_cmd_format("run", source, "json");
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert!(
+        parsed["result"].as_str().unwrap().contains("84"),
+        "result should contain 84: {}",
+        stdout
     );
 }
