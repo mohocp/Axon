@@ -38,6 +38,7 @@ dependencies = [
  "al-parser",
  "al-runtime",
  "al-types",
+ "al-vc",
  "serde_json",
 ]
 

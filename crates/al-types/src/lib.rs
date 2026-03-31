@@ -6,7 +6,10 @@
 use al_ast::{self, Declaration, Expr, MatchBody, Pattern, Statement, TypeExpr};
 use al_capabilities::{resolve_capability, Capability, CapabilityError};
 use al_diagnostics::{Diagnostic, DiagnosticSink, ErrorCode, Span, WarningCode};
-use al_vc::{StubSolver, StubSolverConfig, VcGenerator, VerificationCondition};
+use al_vc::{
+    simple_solver::SimpleSolver, Solver, SolverConfig, StubSolver, StubSolverConfig, VcGenerator,
+    VerificationCondition,
+};
 use std::collections::{HashMap, HashSet};
 
 /// The profile tag for all MVP diagnostics.
@@ -93,10 +96,12 @@ pub struct TypeChecker {
     pub vc_results: Vec<VerificationCondition>,
     pub synthetic_asserts: Vec<al_vc::SyntheticAssertRewrite>,
     pub hir_after_vc: Option<al_hir::HirProgram>,
-    vc_solver: StubSolver,
+    vc_solver: Box<dyn Solver>,
+    vc_solver_config: SolverConfig,
 }
 
 impl TypeChecker {
+    /// Create a new type checker with the default `SimpleSolver` backend.
     pub fn new() -> Self {
         Self {
             env: TypeEnv::default(),
@@ -104,13 +109,25 @@ impl TypeChecker {
             vc_results: Vec::new(),
             synthetic_asserts: Vec::new(),
             hir_after_vc: None,
-            vc_solver: StubSolver::new(StubSolverConfig::default()),
+            vc_solver: Box::new(SimpleSolver::new()),
+            vc_solver_config: SolverConfig::default(),
         }
     }
 
+    /// Create a type checker with a specific stub solver configuration.
+    /// Retained for backward compatibility with existing tests and conformance.
     pub fn with_vc_solver(config: StubSolverConfig) -> Self {
         Self {
-            vc_solver: StubSolver::new(config),
+            vc_solver: Box::new(StubSolver::new(config)),
+            ..Self::new()
+        }
+    }
+
+    /// Create a type checker with a custom solver backend.
+    pub fn with_solver(solver: Box<dyn Solver>, config: SolverConfig) -> Self {
+        Self {
+            vc_solver: solver,
+            vc_solver_config: config,
             ..Self::new()
         }
     }
@@ -910,13 +927,14 @@ impl TypeChecker {
         }
     }
 
-    /// Pass 8: Generate VCs, solve with stub solver, emit diagnostics on invalid,
+    /// Pass 9: Generate VCs, solve with configured solver, emit diagnostics on invalid,
     /// and prepare synthetic ASSERT rewrites for unknown results.
     fn run_vc_pipeline(&mut self, program: &al_ast::Program) {
         let mut generator = VcGenerator::new();
         let mut vcs = generator.generate_program(program);
         for vc in &mut vcs {
-            let _ = self.vc_solver.solve(vc);
+            let result = self.vc_solver.solve(vc, &self.vc_solver_config);
+            vc.result = Some(result);
         }
 
         let mut hir = al_hir::lower_program(program);
@@ -1406,7 +1424,8 @@ OPERATION Verify =>
   BODY { EMIT x }
 "#;
         let program = al_parser::parse(source).unwrap();
-        let mut checker = TypeChecker::new();
+        // Use stub solver to force Unknown results (testing the fallback path).
+        let mut checker = TypeChecker::with_vc_solver(StubSolverConfig::default());
         checker.check(&program);
         assert!(!checker.has_errors());
         assert_eq!(checker.synthetic_asserts.len(), 1);

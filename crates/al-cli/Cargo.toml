@@ -13,6 +13,7 @@ al-ast = { path = "../al-ast" }
 al-lexer = { path = "../al-lexer" }
 al-parser = { path = "../al-parser" }
 al-types = { path = "../al-types" }
+al-vc = { path = "../al-vc" }
 al-capabilities = { path = "../al-capabilities" }
 al-runtime = { path = "../al-runtime" }
 serde_json = { workspace = true }

@@ -334,7 +334,8 @@ OPERATION Verified =>
   BODY { EMIT x }
 "#;
     let program = parse_source(source).expect("should parse");
-    let mut checker = al_types::TypeChecker::new();
+    // Use stub solver to force Unknown results (testing the fallback path).
+    let mut checker = al_types::TypeChecker::with_vc_solver(al_vc::StubSolverConfig::default());
     checker.check(&program);
     assert!(!checker.has_errors(), "unknown VC should not fail compile");
     assert_eq!(checker.synthetic_asserts.len(), 1);
@@ -883,4 +884,126 @@ fn all_fixtures_conform() {
             );
         }
     }
+}
+
+// ===========================================================================
+// C21-C24: Phase 1 — Real verification with SimpleSolver
+// ===========================================================================
+
+/// C21: Arithmetic REQUIRE/ENSURE proven statically by SimpleSolver.
+/// REQUIRE x GT 0, ENSURE x GT 0 → Valid (premise match).
+#[test]
+fn c21_vc_proven_by_simple_solver() {
+    let source = r#"
+OPERATION Verified =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  ENSURE x GT 0
+  BODY { EMIT x }
+"#;
+    let program = parse_source(source).expect("should parse");
+    // Default TypeChecker now uses SimpleSolver
+    let mut checker = al_types::TypeChecker::new();
+    checker.check(&program);
+    assert!(
+        !checker.has_errors(),
+        "C21: SimpleSolver should prove ENSURE from matching REQUIRE"
+    );
+    // The REQUIRE VC should be Valid (axiom), the ENSURE VC should be Valid (premise match)
+    assert!(
+        checker.vc_results.len() >= 2,
+        "C21: should have at least 2 VCs"
+    );
+    for vc in &checker.vc_results {
+        assert!(
+            matches!(vc.result, Some(al_vc::VcResult::Valid)),
+            "C21: VC {} should be Valid, got {:?}",
+            vc.vc_id,
+            vc.result
+        );
+    }
+}
+
+/// C22: Invalid postcondition produces compile-time error.
+/// REQUIRE x GT 0 but body doesn't guarantee ENSURE, forced invalid via stub.
+#[test]
+fn c22_vc_disproven_compile_error() {
+    let source = r#"
+OPERATION Invalid =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  BODY { EMIT x }
+"#;
+    let program = parse_source(source).expect("should parse");
+    let mut checker = al_types::TypeChecker::with_vc_solver(al_vc::StubSolverConfig {
+        default_mode: al_vc::StubSolverMode::AlwaysInvalid {
+            counterexample: "x = -1".into(),
+        },
+        per_vc: std::collections::HashMap::new(),
+    });
+    checker.check(&program);
+    assert!(
+        checker.has_errors(),
+        "C22: invalid VC should produce compile error"
+    );
+    assert!(
+        checker.sink.errors().iter().any(|d| {
+            d.code == al_diagnostics::DiagnosticCode::Error(al_diagnostics::ErrorCode::VcInvalid)
+        }),
+        "C22: should have VcInvalid error code"
+    );
+}
+
+/// C23: Constant expression verification — SimpleSolver evaluates `3 GT 2` as Valid.
+#[test]
+fn c23_constant_expression_proven() {
+    let source = r#"
+OPERATION ConstCheck =>
+  INPUT x: Int64
+  BODY {
+    ASSERT 3 GT 2
+    EMIT x
+  }
+"#;
+    let program = parse_source(source).expect("should parse");
+    let mut checker = al_types::TypeChecker::new();
+    checker.check(&program);
+    assert!(
+        !checker.has_errors(),
+        "C23: constant ASSERT 3 GT 2 should be proven Valid"
+    );
+    // Find the ASSERT VC and verify it's Valid
+    let assert_vc = checker
+        .vc_results
+        .iter()
+        .find(|vc| matches!(vc.origin, al_vc::VcOrigin::Assert { synthetic: false }));
+    assert!(assert_vc.is_some(), "C23: should have an ASSERT VC");
+    assert!(
+        matches!(assert_vc.unwrap().result, Some(al_vc::VcResult::Valid)),
+        "C23: ASSERT 3 GT 2 should be Valid"
+    );
+}
+
+/// C24: Unknown VC falls back to runtime ASSERT (backward compat).
+/// Using stub solver to force Unknown, verify synthetic assert is injected.
+#[test]
+fn c24_unknown_fallback_to_runtime_assert() {
+    let source = r#"
+OPERATION FallbackCheck =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  BODY { EMIT x }
+"#;
+    let program = parse_source(source).expect("should parse");
+    let mut checker = al_types::TypeChecker::with_vc_solver(al_vc::StubSolverConfig::default());
+    checker.check(&program);
+    // Stub solver returns Unknown → no compile error, but synthetic asserts injected
+    assert!(
+        !checker.has_errors(),
+        "C24: Unknown VCs should not produce compile errors"
+    );
+    assert!(
+        !checker.synthetic_asserts.is_empty(),
+        "C24: Unknown VCs should inject synthetic runtime ASSERTs"
+    );
 }

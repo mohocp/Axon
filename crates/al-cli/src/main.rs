@@ -6,6 +6,7 @@
 //! Supports `--format human|json|jsonl` for diagnostic output.
 
 use al_diagnostics::{render_diagnostic, OutputFormat};
+use al_vc::{simple_solver::SimpleSolver, Solver, SolverConfig, StubSolver, StubSolverConfig};
 use std::env;
 use std::fs;
 use std::process;
@@ -20,6 +21,8 @@ struct CliArgs {
     format: OutputFormat,
     help: bool,
     version: bool,
+    solver: String,
+    solver_timeout: u64,
 }
 
 fn parse_args() -> CliArgs {
@@ -28,6 +31,8 @@ fn parse_args() -> CliArgs {
     let mut positional = Vec::new();
     let mut help = false;
     let mut version = false;
+    let mut solver = "simple".to_string();
+    let mut solver_timeout: u64 = 5000;
 
     let mut i = 1;
     while i < args.len() {
@@ -48,6 +53,18 @@ fn parse_args() -> CliArgs {
                     };
                 }
             }
+            "--solver" => {
+                i += 1;
+                if i < args.len() {
+                    solver = args[i].clone();
+                }
+            }
+            "--solver-timeout" => {
+                i += 1;
+                if i < args.len() {
+                    solver_timeout = args[i].parse().unwrap_or(5000);
+                }
+            }
             _ => positional.push(args[i].clone()),
         }
         i += 1;
@@ -59,23 +76,34 @@ fn parse_args() -> CliArgs {
         format,
         help,
         version,
+        solver,
+        solver_timeout,
+    }
+}
+
+fn make_solver(name: &str) -> Box<dyn Solver> {
+    match name {
+        "stub" => Box::new(StubSolver::new(StubSolverConfig::default())),
+        _ => Box::new(SimpleSolver::new()),
     }
 }
 
 fn print_usage() {
     eprintln!("AgentLang CLI v{}", VERSION);
-    eprintln!("Usage: al <command> [file.al] [--format human|json|jsonl]");
+    eprintln!("Usage: al <command> [file.al] [options]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  lex    <file>  Tokenize and print tokens");
     eprintln!("  parse  <file>  Parse and print AST summary");
-    eprintln!("  check  <file>  Type-check a source file");
-    eprintln!("  run    <file>  Parse, check, and execute");
+    eprintln!("  check  <file>  Type-check and verify a source file");
+    eprintln!("  run    <file>  Parse, check, verify, and execute");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --format <fmt>  Output format: human, json, jsonl (default: human)");
-    eprintln!("  --help, -h      Show this help message");
-    eprintln!("  --version, -V   Show version information");
+    eprintln!("  --format <fmt>       Output format: human, json, jsonl (default: human)");
+    eprintln!("  --solver <name>      Solver backend: simple, stub (default: simple)");
+    eprintln!("  --solver-timeout <ms> Solver timeout per VC in ms (default: 5000)");
+    eprintln!("  --help, -h           Show this help message");
+    eprintln!("  --version, -V        Show version information");
 }
 
 fn print_version() {
@@ -118,18 +146,18 @@ fn main() {
                 eprintln!("Usage: al check <file.al>");
                 process::exit(1);
             });
-            cmd_check(path, cli.format);
+            cmd_check(path, cli.format, &cli.solver, cli.solver_timeout);
         }
         "run" => {
             let path = cli.file.as_deref().unwrap_or_else(|| {
                 eprintln!("Usage: al run <file.al>");
                 process::exit(1);
             });
-            cmd_run(path, cli.format);
+            cmd_run(path, cli.format, &cli.solver, cli.solver_timeout);
         }
         other => {
             // If no command given, treat first arg as a file to run
-            cmd_run(other, cli.format);
+            cmd_run(other, cli.format, &cli.solver, cli.solver_timeout);
         }
     }
 }
@@ -291,7 +319,7 @@ fn cmd_parse(path: &str, format: OutputFormat) {
     }
 }
 
-fn cmd_check(path: &str, format: OutputFormat) {
+fn cmd_check(path: &str, format: OutputFormat, solver_name: &str, solver_timeout: u64) {
     let source = read_source(path);
     let program = match al_parser::parse(&source) {
         Ok(p) => p,
@@ -301,7 +329,11 @@ fn cmd_check(path: &str, format: OutputFormat) {
         }
     };
 
-    let mut checker = al_types::TypeChecker::new();
+    let solver = make_solver(solver_name);
+    let config = SolverConfig {
+        timeout_ms: solver_timeout,
+    };
+    let mut checker = al_types::TypeChecker::with_solver(solver, config);
     checker.check(&program);
 
     if checker.has_errors() {
@@ -354,7 +386,7 @@ fn cmd_check(path: &str, format: OutputFormat) {
     }
 }
 
-fn cmd_run(path: &str, format: OutputFormat) {
+fn cmd_run(path: &str, format: OutputFormat, solver_name: &str, solver_timeout: u64) {
     let source = read_source(path);
 
     // Phase 1: Lex
@@ -377,8 +409,12 @@ fn cmd_run(path: &str, format: OutputFormat) {
     };
     let decl_count = program.declarations.len();
 
-    // Phase 3: Type check
-    let mut checker = al_types::TypeChecker::new();
+    // Phase 3: Type check and verify
+    let solver = make_solver(solver_name);
+    let config = SolverConfig {
+        timeout_ms: solver_timeout,
+    };
+    let mut checker = al_types::TypeChecker::with_solver(solver, config);
     checker.check(&program);
 
     if checker.has_errors() {

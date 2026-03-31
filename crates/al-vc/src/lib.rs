@@ -5,6 +5,16 @@
 //! - A configurable stub solver (`Valid`/`Invalid`/`Unknown`).
 //! - Unknown-result plumbing to inject synthetic HIR `ASSERT` nodes.
 //! - Invalid-result diagnostics (`VC_INVALID`).
+//!
+//! Phase 1 additions:
+//! - `Solver` trait abstracting over solver backends.
+//! - `SmtExpr` intermediate representation for solver-agnostic translation.
+//! - `SmtTranslator` converting AST expressions to `SmtExpr`.
+//! - `SimpleSolver` proving common patterns from premises.
+//! - Feature-gated `Z3Solver` for full SMT power (future).
+
+pub mod simple_solver;
+pub mod smt;
 
 use al_ast::{Declaration, Expr, MatchBody, Statement};
 use al_diagnostics::{Diagnostic, DiagnosticSink, ErrorCode, Span};
@@ -41,6 +51,10 @@ pub struct VerificationCondition {
     pub description: String,
     pub span: Span,
     pub result: Option<VcResult>,
+    /// The expression AST for this VC (for solver translation).
+    pub expr: Option<Expr>,
+    /// Premise expressions (REQUIRE clauses) available when solving this VC.
+    pub premises: Vec<Expr>,
 }
 
 impl VerificationCondition {
@@ -58,7 +72,19 @@ impl VerificationCondition {
             description,
             span,
             result: None,
+            expr: None,
+            premises: Vec::new(),
         }
+    }
+
+    fn with_expr(mut self, expr: Expr) -> Self {
+        self.expr = Some(expr);
+        self
+    }
+
+    fn with_premises(mut self, premises: Vec<Expr>) -> Self {
+        self.premises = premises;
+        self
     }
 }
 
@@ -69,6 +95,36 @@ pub struct SyntheticAssertRewrite {
     pub vc_id: String,
     pub solver_reason: String,
 }
+
+// ---------------------------------------------------------------------------
+// Solver trait
+// ---------------------------------------------------------------------------
+
+/// Configuration for solver execution.
+#[derive(Debug, Clone)]
+pub struct SolverConfig {
+    /// Timeout in milliseconds per VC. `0` means no timeout.
+    pub timeout_ms: u64,
+}
+
+impl Default for SolverConfig {
+    fn default() -> Self {
+        Self { timeout_ms: 5000 }
+    }
+}
+
+/// Abstract solver backend. Implement this to add new solver backends.
+pub trait Solver: Send + Sync {
+    /// Attempt to solve a verification condition.
+    fn solve(&self, vc: &mut VerificationCondition, config: &SolverConfig) -> VcResult;
+
+    /// Human-readable name of this solver backend.
+    fn name(&self) -> &str;
+}
+
+// ---------------------------------------------------------------------------
+// VC Generator
+// ---------------------------------------------------------------------------
 
 /// Generates VCs from an AST program.
 pub struct VcGenerator {
@@ -92,26 +148,49 @@ impl VcGenerator {
                 ..
             } = &decl.node
             {
+                // Collect REQUIRE expressions as premises for ENSURE/ASSERT VCs.
+                let premises: Vec<Expr> = requires.iter().map(|r| r.node.clone()).collect();
+
                 for req in requires {
-                    vcs.push(self.make_vc(name.node.as_str(), VcOrigin::Require, req));
+                    // REQUIRE VCs have no premises (they ARE the premises).
+                    // We mark them as Valid by convention — they are axioms
+                    // from the caller's obligation.
+                    let vc = self
+                        .make_vc(name.node.as_str(), VcOrigin::Require, req)
+                        .with_expr(req.node.clone());
+                    vcs.push(vc);
                 }
                 for ens in ensures {
-                    vcs.push(self.make_vc(name.node.as_str(), VcOrigin::Ensure, ens));
+                    let vc = self
+                        .make_vc(name.node.as_str(), VcOrigin::Ensure, ens)
+                        .with_expr(ens.node.clone())
+                        .with_premises(premises.clone());
+                    vcs.push(vc);
                 }
                 for invariant in invariants {
-                    vcs.push(self.make_vc(
-                        name.node.as_str(),
-                        VcOrigin::InvariantLoopEntry,
-                        invariant,
-                    ));
-                    vcs.push(self.make_vc(
-                        name.node.as_str(),
-                        VcOrigin::InvariantIterationBoundary,
-                        invariant,
-                    ));
+                    let vc_entry = self
+                        .make_vc(name.node.as_str(), VcOrigin::InvariantLoopEntry, invariant)
+                        .with_expr(invariant.node.clone())
+                        .with_premises(premises.clone());
+                    let vc_iter = self
+                        .make_vc(
+                            name.node.as_str(),
+                            VcOrigin::InvariantIterationBoundary,
+                            invariant,
+                        )
+                        .with_expr(invariant.node.clone())
+                        .with_premises(premises.clone());
+                    vcs.push(vc_entry);
+                    vcs.push(vc_iter);
                 }
                 for stmt in &body.node.stmts {
-                    self.collect_assert_vcs(name.node.as_str(), &stmt.node, stmt.span, &mut vcs);
+                    self.collect_assert_vcs(
+                        name.node.as_str(),
+                        &stmt.node,
+                        stmt.span,
+                        &premises,
+                        &mut vcs,
+                    );
                 }
             }
         }
@@ -123,11 +202,16 @@ impl VcGenerator {
         operation: &str,
         stmt: &Statement,
         stmt_span: Span,
+        premises: &[Expr],
         out: &mut Vec<VerificationCondition>,
     ) {
         match stmt {
             Statement::Assert { condition } => {
-                out.push(self.make_vc(operation, VcOrigin::Assert { synthetic: false }, condition));
+                let vc = self
+                    .make_vc(operation, VcOrigin::Assert { synthetic: false }, condition)
+                    .with_expr(condition.node.clone())
+                    .with_premises(premises.to_vec());
+                out.push(vc);
             }
             Statement::Match {
                 arms, otherwise, ..
@@ -135,21 +219,33 @@ impl VcGenerator {
                 for arm in arms {
                     if let MatchBody::Block(block) = &arm.node.body.node {
                         for nested in &block.node.stmts {
-                            self.collect_assert_vcs(operation, &nested.node, nested.span, out);
+                            self.collect_assert_vcs(
+                                operation,
+                                &nested.node,
+                                nested.span,
+                                premises,
+                                out,
+                            );
                         }
                     }
                 }
                 if let Some(otherwise) = otherwise {
                     if let MatchBody::Block(block) = &otherwise.node {
                         for nested in &block.node.stmts {
-                            self.collect_assert_vcs(operation, &nested.node, nested.span, out);
+                            self.collect_assert_vcs(
+                                operation,
+                                &nested.node,
+                                nested.span,
+                                premises,
+                                out,
+                            );
                         }
                     }
                 }
             }
             Statement::Loop { body, .. } => {
                 for nested in &body.node.stmts {
-                    self.collect_assert_vcs(operation, &nested.node, nested.span, out);
+                    self.collect_assert_vcs(operation, &nested.node, nested.span, premises, out);
                 }
             }
             _ => {
@@ -176,6 +272,10 @@ impl Default for VcGenerator {
         Self::new()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Stub Solver (MVP legacy)
+// ---------------------------------------------------------------------------
 
 /// Stub solver mode for MVP.
 #[derive(Debug, Clone, PartialEq)]
@@ -214,8 +314,8 @@ impl StubSolver {
         Self { config }
     }
 
-    /// Attempt to solve a verification condition.
-    pub fn solve<'a>(&self, vc: &'a mut VerificationCondition) -> &'a VcResult {
+    /// Legacy solve method for backward compatibility.
+    pub fn solve_legacy<'a>(&self, vc: &'a mut VerificationCondition) -> &'a VcResult {
         let mode = self
             .config
             .per_vc
@@ -240,6 +340,33 @@ impl Default for StubSolver {
         Self::new(StubSolverConfig::default())
     }
 }
+
+impl Solver for StubSolver {
+    fn solve(&self, vc: &mut VerificationCondition, _config: &SolverConfig) -> VcResult {
+        let mode = self
+            .config
+            .per_vc
+            .get(&vc.vc_id)
+            .unwrap_or(&self.config.default_mode);
+        match mode {
+            StubSolverMode::AlwaysValid => VcResult::Valid,
+            StubSolverMode::AlwaysInvalid { counterexample } => VcResult::Invalid {
+                counterexample: counterexample.clone(),
+            },
+            StubSolverMode::AlwaysUnknown { reason } => VcResult::Unknown {
+                reason: reason.clone(),
+            },
+        }
+    }
+
+    fn name(&self) -> &str {
+        "stub"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
 
 /// Check if a VC result requires runtime assertion insertion.
 pub fn needs_runtime_assert(result: &VcResult) -> bool {
@@ -364,6 +491,24 @@ OPERATION LoopGuarded =>
     }
 
     #[test]
+    fn stub_solver_implements_trait() {
+        let solver = StubSolver::default();
+        assert_eq!(solver.name(), "stub");
+        let config = SolverConfig::default();
+
+        let mut vc = VerificationCondition::new(
+            "vc_000001".to_string(),
+            "Test".to_string(),
+            VcOrigin::Require,
+            "x > 0".to_string(),
+            Span::dummy(),
+        );
+
+        let result = solver.solve(&mut vc, &config);
+        assert!(matches!(result, VcResult::Unknown { .. }));
+    }
+
+    #[test]
     fn stub_solver_can_return_valid_invalid_unknown() {
         let mut vc = VerificationCondition::new(
             "vc_000001".to_string(),
@@ -377,7 +522,7 @@ OPERATION LoopGuarded =>
             default_mode: StubSolverMode::AlwaysValid,
             per_vc: HashMap::new(),
         });
-        assert_eq!(valid_solver.solve(&mut vc), &VcResult::Valid);
+        assert_eq!(valid_solver.solve_legacy(&mut vc), &VcResult::Valid);
 
         let invalid_solver = StubSolver::new(StubSolverConfig {
             default_mode: StubSolverMode::AlwaysInvalid {
@@ -386,13 +531,13 @@ OPERATION LoopGuarded =>
             per_vc: HashMap::new(),
         });
         assert!(matches!(
-            invalid_solver.solve(&mut vc),
+            invalid_solver.solve_legacy(&mut vc),
             VcResult::Invalid { .. }
         ));
 
         let unknown_solver = StubSolver::default();
         assert!(matches!(
-            unknown_solver.solve(&mut vc),
+            unknown_solver.solve_legacy(&mut vc),
             VcResult::Unknown { .. }
         ));
     }
@@ -410,7 +555,7 @@ OPERATION Verify =>
         let mut vcs = generator.generate_program(&program);
         let solver = StubSolver::default();
         for vc in &mut vcs {
-            let _ = solver.solve(vc);
+            let _ = solver.solve_legacy(vc);
         }
 
         let mut hir = al_hir::lower_program(&program);
@@ -452,7 +597,7 @@ OPERATION Verify =>
             per_vc: HashMap::new(),
         });
         for vc in &mut vcs {
-            let _ = solver.solve(vc);
+            let _ = solver.solve_legacy(vc);
         }
 
         let mut hir = al_hir::lower_program(&program);
@@ -464,5 +609,34 @@ OPERATION Verify =>
             .errors()
             .iter()
             .any(|d| { d.code == al_diagnostics::DiagnosticCode::Error(ErrorCode::VcInvalid) }));
+    }
+
+    #[test]
+    fn vc_generator_captures_expr_and_premises() {
+        let source = r#"
+OPERATION Verify =>
+  INPUT x: Int64
+  REQUIRE x GT 0
+  ENSURE x GT 0
+  BODY {
+    ASSERT x GT 0
+    EMIT x
+  }
+"#;
+        let program = parse(source);
+        let mut generator = VcGenerator::new();
+        let vcs = generator.generate_program(&program);
+
+        // REQUIRE VC has no premises (it is the premise)
+        assert!(vcs[0].expr.is_some());
+        assert!(vcs[0].premises.is_empty());
+
+        // ENSURE VC has the REQUIRE as a premise
+        assert!(vcs[1].expr.is_some());
+        assert_eq!(vcs[1].premises.len(), 1);
+
+        // ASSERT VC also has the REQUIRE as a premise
+        assert!(vcs[2].expr.is_some());
+        assert_eq!(vcs[2].premises.len(), 1);
     }
 }
